@@ -15,7 +15,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          fetch-depth: 0  # Full history needed for MinVer to resolve version from tags
+          fetch-depth: 0    # Full history needed for MinVer to resolve version from tags
+          fetch-tags: true  # Ensure all tags are fetched for MinVer
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v5
