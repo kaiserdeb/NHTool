@@ -7,10 +7,12 @@ namespace NHTool.CodeGen;
 public class EntityGenerator
 {
     private readonly DatabaseProvider _provider;
+    private readonly bool _legacyStyle;
 
-    public EntityGenerator(DatabaseProvider provider)
+    public EntityGenerator(DatabaseProvider provider, bool legacyStyle)
     {
         _provider = provider;
+        _legacyStyle = legacyStyle;
     }
 
     public string Generate(TableInfo table, string ns)
@@ -20,24 +22,45 @@ public class EntityGenerator
 
         sb.AppendLine("using System;");
         sb.AppendLine();
-        sb.AppendLine($"namespace {ns};");
-        sb.AppendLine();
-        sb.AppendLine($"public class {className}");
-        sb.AppendLine("{");
 
-        foreach (var col in table.Columns)
+        if (_legacyStyle)
         {
-            var propName = NamingHelper.ToPropertyName(col.ColumnName);
-            var clrType = TypeMapper.GetClrType(col, _provider);
-            var initializer = TypeMapper.GetDefaultInitializer(col, _provider);
+            sb.AppendLine($"namespace {ns}");
+            sb.AppendLine("{");
+            sb.AppendLine($"    public class {className}");
+            sb.AppendLine("    {");
 
-            if (initializer != null)
-                sb.AppendLine($"    public virtual {clrType} {propName} {{ get; set; }}{initializer}");
-            else
-                sb.AppendLine($"    public virtual {clrType} {propName} {{ get; set; }}");
+            foreach (var col in table.Columns)
+            {
+                var propName = NamingHelper.ToPropertyName(col.ColumnName);
+                var clrType = TypeMapper.GetClrType(col, _provider);
+                sb.AppendLine($"        public virtual {clrType} {propName} {{ get; set; }}");
+            }
+
+            sb.AppendLine("    }");
+            sb.AppendLine("}");
         }
+        else
+        {
+            sb.AppendLine($"namespace {ns};");
+            sb.AppendLine();
+            sb.AppendLine($"public class {className}");
+            sb.AppendLine("{");
 
-        sb.AppendLine("}");
+            foreach (var col in table.Columns)
+            {
+                var propName = NamingHelper.ToPropertyName(col.ColumnName);
+                var clrType = TypeMapper.GetClrType(col, _provider);
+                var initializer = TypeMapper.GetDefaultInitializer(col, _provider);
+
+                if (initializer != null)
+                    sb.AppendLine($"    public virtual {clrType} {propName} {{ get; set; }}{initializer}");
+                else
+                    sb.AppendLine($"    public virtual {clrType} {propName} {{ get; set; }}");
+            }
+
+            sb.AppendLine("}");
+        }
 
         return sb.ToString();
     }
