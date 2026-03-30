@@ -1,0 +1,24 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 18
+VisualStudioVersion = 18.4.11620.152 stable
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NHTool", "NHTool\NHTool.csproj", "{D810151C-17B3-C6B3-D5F6-5E94D327F649}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{D810151C-17B3-C6B3-D5F6-5E94D327F649}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D810151C-17B3-C6B3-D5F6-5E94D327F649}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D810151C-17B3-C6B3-D5F6-5E94D327F649}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D810151C-17B3-C6B3-D5F6-5E94D327F649}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {8993C36C-DCD2-41CD-8539-B2982AE0CDA4}
+	EndGlobalSection
+EndGlobal
