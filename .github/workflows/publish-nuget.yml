@@ -1,0 +1,31 @@
+name: Publish to NuGet
+
+on:
+  push:
+    branches: [master]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # Only run if the merge commit comes from a PR (not direct pushes)
+    if: github.event.head_commit.message != ''
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore NHTool/NHTool.csproj
+
+      - name: Build
+        run: dotnet build NHTool/NHTool.csproj -c Release --no-restore
+
+      - name: Pack
+        run: dotnet pack NHTool/NHTool.csproj -c Release --no-build --output ./artifacts
+
+      - name: Publish to NuGet
+        run: dotnet nuget push ./artifacts/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
