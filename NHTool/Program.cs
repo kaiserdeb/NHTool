@@ -34,14 +34,20 @@ var tablesOption = new Option<string?>(
     aliases: new[] { "--tables", "-t" },
     description: "Comma-separated list of tables to scaffold (e.g. USERS,ORDERS,ORDER_ITEMS). If omitted, all tables are scaffolded.");
 
+var legacyOption = new Option<bool>(
+    aliases: new[] { "--use-legacy-style", "-l" },
+    getDefaultValue: () => false,
+    description: "Generate code compatible with .NET Framework (C# 7.3): block-scoped namespaces, no NRT, no target-typed new.");
+
 scaffoldCommand.AddArgument(connectionStringArg);
 scaffoldCommand.AddArgument(providerArg);
 scaffoldCommand.AddOption(outputOption);
 scaffoldCommand.AddOption(namespaceOption);
 scaffoldCommand.AddOption(schemaOption);
 scaffoldCommand.AddOption(tablesOption);
+scaffoldCommand.AddOption(legacyOption);
 
-scaffoldCommand.SetHandler(async (connStr, providerName, output, ns, schema, tables) =>
+scaffoldCommand.SetHandler(async (connStr, providerName, output, ns, schema, tables, legacy) =>
 {
     try
     {
@@ -52,7 +58,7 @@ scaffoldCommand.SetHandler(async (connStr, providerName, output, ns, schema, tab
             .ToHashSet();
 
         var orchestrator = new ScaffoldOrchestrator();
-        await orchestrator.RunAsync(connStr, provider, output, ns, schema, tableFilter);
+        await orchestrator.RunAsync(connStr, provider, output, ns, schema, tableFilter, legacy);
     }
     catch (ArgumentException ex)
     {
@@ -69,7 +75,7 @@ scaffoldCommand.SetHandler(async (connStr, providerName, output, ns, schema, tab
         Environment.ExitCode = 2;
     }
 },
-connectionStringArg, providerArg, outputOption, namespaceOption, schemaOption, tablesOption);
+connectionStringArg, providerArg, outputOption, namespaceOption, schemaOption, tablesOption, legacyOption);
 
 rootCommand.AddCommand(scaffoldCommand);
 

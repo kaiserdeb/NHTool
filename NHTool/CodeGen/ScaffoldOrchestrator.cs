@@ -12,7 +12,8 @@ public class ScaffoldOrchestrator
         string outputDir,
         string ns,
         string? schemaFilter,
-        HashSet<string>? tableFilter = null)
+        HashSet<string>? tableFilter = null,
+        bool legacyStyle = false)
     {
         Console.WriteLine($"Connecting to {provider} database...");
 
@@ -59,8 +60,11 @@ public class ScaffoldOrchestrator
         Directory.CreateDirectory(entitiesDir);
         Directory.CreateDirectory(mappingsDir);
 
-        var entityGen = new EntityGenerator(provider);
-        var mappingGen = new MappingGenerator(provider);
+        if (legacyStyle)
+            Console.WriteLine("Using legacy style (compatible with .NET Framework / C# 7.3).");
+
+        var entityGen = new EntityGenerator(provider, legacyStyle);
+        var mappingGen = new MappingGenerator(provider, legacyStyle);
 
         foreach (var table in tables)
         {
@@ -78,7 +82,7 @@ public class ScaffoldOrchestrator
         }
 
         // Generate NHibernateHelper.cs
-        var sfGen = new SessionFactoryGenerator(provider);
+        var sfGen = new SessionFactoryGenerator(provider, legacyStyle);
         var helperCode = sfGen.Generate(tables, ns);
         var helperPath = Path.Combine(outputDir, "NHibernateHelper.cs");
         await File.WriteAllTextAsync(helperPath, helperCode);
