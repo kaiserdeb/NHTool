@@ -12,9 +12,17 @@
     <Version>1.0.0</Version>
     <Authors>nh-tool contributors</Authors>
     <Description>CLI tool to scaffold NHibernate Mapping-by-Code classes from database schemas</Description>
+    <PackageReadmeFile>NUGET_README.md</PackageReadmeFile>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageTags>nhibernate;scaffold;mapping-by-code;orm;codegen;cli</PackageTags>
+    <RepositoryType>git</RepositoryType>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\NUGET_README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
