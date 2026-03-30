@@ -20,6 +20,7 @@ public class MappingGenerator
 
         sb.AppendLine("using NHibernate.Mapping.ByCode;");
         sb.AppendLine("using NHibernate.Mapping.ByCode.Conformist;");
+        sb.AppendLine($"using {ns};");
         sb.AppendLine();
         sb.AppendLine($"namespace {ns}.Mappings;");
         sb.AppendLine();
@@ -41,10 +42,15 @@ public class MappingGenerator
         {
             var pk = pks[0];
             var propName = NamingHelper.ToPropertyName(pk.ColumnName);
+            var clrType = TypeMapper.GetClrType(pk, _provider);
+            var isNumericPk = IsNumericType(clrType);
+
             sb.AppendLine($"        Id(x => x.{propName}, m =>");
             sb.AppendLine("        {");
             sb.AppendLine($"            m.Column(\"{pk.ColumnName}\");");
-            sb.AppendLine("            m.Generator(Generators.Native);");
+            sb.AppendLine(isNumericPk
+                ? "            m.Generator(Generators.Native);"
+                : "            m.Generator(Generators.Assigned);");
             sb.AppendLine("        });");
         }
         else if (pks.Count > 1)
@@ -72,7 +78,7 @@ public class MappingGenerator
             if (!col.IsNullable)
                 sb.AppendLine("            m.NotNullable(true);");
 
-            if (col.MaxLength.HasValue && IsStringType(col))
+            if (col.MaxLength.HasValue && col.MaxLength.Value > 0 && IsStringType(col))
                 sb.AppendLine($"            m.Length({col.MaxLength.Value});");
 
             sb.AppendLine("        });");
@@ -89,5 +95,11 @@ public class MappingGenerator
         var dt = col.DataType.ToUpperInvariant();
         return dt.Contains("VARCHAR") || dt.Contains("CHAR") || dt.Contains("TEXT")
             || dt.Contains("NCHAR") || dt.Contains("NTEXT");
+    }
+
+    private static bool IsNumericType(string clrType)
+    {
+        return clrType is "int" or "int?" or "long" or "long?" or "short" or "short?"
+            or "byte" or "byte?" or "decimal" or "decimal?";
     }
 }

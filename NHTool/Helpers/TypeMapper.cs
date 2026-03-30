@@ -54,8 +54,10 @@ public static class TypeMapper
 
     private static string MapOracle(ColumnInfo col) => col.DataType.ToUpperInvariant() switch
     {
-        "NUMBER" when col.Scale == 0 && col.Precision <= 10 => "int",
-        "NUMBER" when col.Scale == 0 && col.Precision > 10 => "long",
+        // NUMBER without precision/scale (very common for IDs) -> int
+        "NUMBER" when col.Precision is null && col.Scale is null => "int",
+        "NUMBER" when col.Scale is null or 0 && col.Precision <= 10 => "int",
+        "NUMBER" when col.Scale is null or 0 && col.Precision > 10 => "long",
         "NUMBER" => "decimal",
         "FLOAT" or "BINARY_FLOAT" => "float",
         "BINARY_DOUBLE" => "double",

@@ -91,6 +91,7 @@ public class OracleSchemaReader : ISchemaReader
 
         {
             await using var colCmd = new OracleCommand(columnsSql, connection);
+            colCmd.BindByName = true; // Oracle defaults to bind-by-position; query uses :owner twice
             colCmd.Parameters.Add(new OracleParameter("owner", owner));
 
             await using var colReader = await colCmd.ExecuteReaderAsync();
@@ -104,15 +105,17 @@ public class OracleSchemaReader : ISchemaReader
                     columnsByTable[tableName] = columns;
                 }
 
+                // Use Convert.ToInt32(GetValue(...)) because Oracle NUMBER returns
+                // OracleDecimal, and GetInt32() can throw InvalidCastException.
                 columns.Add(new ColumnInfo
                 {
                     ColumnName = colReader.GetString(1),
                     DataType = colReader.GetString(2),
                     IsNullable = colReader.GetString(3) == "Y",
-                    MaxLength = colReader.IsDBNull(4) ? null : colReader.GetInt32(4),
-                    Precision = colReader.IsDBNull(5) ? null : colReader.GetInt32(5),
-                    Scale = colReader.IsDBNull(6) ? null : colReader.GetInt32(6),
-                    IsPrimaryKey = colReader.GetInt32(7) == 1
+                    MaxLength = colReader.IsDBNull(4) ? null : Convert.ToInt32(colReader.GetValue(4)),
+                    Precision = colReader.IsDBNull(5) ? null : Convert.ToInt32(colReader.GetValue(5)),
+                    Scale = colReader.IsDBNull(6) ? null : Convert.ToInt32(colReader.GetValue(6)),
+                    IsPrimaryKey = Convert.ToInt32(colReader.GetValue(7)) == 1
                 });
             }
         }
