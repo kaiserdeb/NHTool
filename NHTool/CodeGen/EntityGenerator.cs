@@ -29,8 +29,12 @@ public class EntityGenerator
         {
             var propName = NamingHelper.ToPropertyName(col.ColumnName);
             var clrType = TypeMapper.GetClrType(col, _provider);
+            var initializer = TypeMapper.GetDefaultInitializer(col, _provider);
 
-            sb.AppendLine($"    public virtual {clrType} {propName} {{ get; set; }}");
+            if (initializer != null)
+                sb.AppendLine($"    public virtual {clrType} {propName} {{ get; set; }}{initializer}");
+            else
+                sb.AppendLine($"    public virtual {clrType} {propName} {{ get; set; }}");
         }
 
         sb.AppendLine("}");

@@ -6,7 +6,7 @@ public static class TypeMapper
 {
     /// <summary>
     /// Maps a database column type to a C# type string.
-    /// Returns nullable form (e.g. "int?") when the column is nullable and the type is a value type.
+    /// Handles nullability for both value types (int?) and reference types (string?).
     /// </summary>
     public static string GetClrType(ColumnInfo column, DatabaseProvider provider)
     {
@@ -17,10 +17,41 @@ public static class TypeMapper
             _ => "object"
         };
 
-        if (column.IsNullable && IsValueType(baseType))
+        if (column.IsNullable)
+        {
+            // Value types: append ?  (int -> int?)
+            // Reference types: append ? (string -> string?)
             return baseType + "?";
+        }
 
         return baseType;
+    }
+
+    /// <summary>
+    /// Returns the default initializer for non-nullable properties to avoid CS8618 warnings.
+    /// Returns null when no initializer is needed (value types are already default-initialized).
+    /// </summary>
+    public static string? GetDefaultInitializer(ColumnInfo column, DatabaseProvider provider)
+    {
+        var baseType = provider switch
+        {
+            DatabaseProvider.Oracle => MapOracle(column),
+            DatabaseProvider.SqlServer => MapSqlServer(column),
+            _ => "object"
+        };
+
+        // Non-nullable reference types need explicit initialization
+        if (!column.IsNullable && IsReferenceType(baseType))
+        {
+            return baseType switch
+            {
+                "string" => " = string.Empty;",
+                "byte[]" => " = Array.Empty<byte>();",
+                _ => " = default!;"
+            };
+        }
+
+        return null;
     }
 
     private static string MapOracle(ColumnInfo col) => col.DataType.ToUpperInvariant() switch
@@ -57,9 +88,9 @@ public static class TypeMapper
         _ => "object"
     };
 
-    private static bool IsValueType(string clrType) => clrType switch
+    private static bool IsReferenceType(string clrType) => clrType switch
     {
-        "string" or "byte[]" or "object" => false,
-        _ => true
+        "string" or "byte[]" or "object" => true,
+        _ => false
     };
 }

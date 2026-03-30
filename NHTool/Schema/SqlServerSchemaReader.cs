@@ -9,13 +9,14 @@ public class SqlServerSchemaReader : ISchemaReader
     public async Task<List<TableInfo>> ReadTablesAsync(string connectionString, string? schemaFilter = null)
     {
         var tables = new List<TableInfo>();
+        var columnsByTable = new Dictionary<string, List<ColumnInfo>>();
 
         await using var connection = new MsSqlConnection(connectionString);
         await connection.OpenAsync();
 
         string schema = schemaFilter ?? "dbo";
 
-        // Read tables
+        // ── 1. Read all tables ───────────────────────────────────────
         var tablesSql = @"
             SELECT TABLE_SCHEMA, TABLE_NAME
             FROM INFORMATION_SCHEMA.TABLES
@@ -23,22 +24,29 @@ public class SqlServerSchemaReader : ISchemaReader
               AND TABLE_SCHEMA = @schema
             ORDER BY TABLE_NAME";
 
-        await using var tablesCmd = new MsSqlCommand(tablesSql, connection);
-        tablesCmd.Parameters.AddWithValue("@schema", schema);
-
-        await using var tablesReader = await tablesCmd.ExecuteReaderAsync();
-        while (await tablesReader.ReadAsync())
+        // Scope the reader so it's closed before the next query
         {
-            tables.Add(new TableInfo
-            {
-                Schema = tablesReader.GetString(0),
-                TableName = tablesReader.GetString(1)
-            });
-        }
+            await using var tablesCmd = new MsSqlCommand(tablesSql, connection);
+            tablesCmd.Parameters.AddWithValue("@schema", schema);
 
-        // Read columns for each table
+            await using var tablesReader = await tablesCmd.ExecuteReaderAsync();
+            while (await tablesReader.ReadAsync())
+            {
+                tables.Add(new TableInfo
+                {
+                    Schema = tablesReader.GetString(0),
+                    TableName = tablesReader.GetString(1)
+                });
+            }
+        } // tablesReader is disposed here
+
+        if (tables.Count == 0)
+            return tables;
+
+        // ── 2. Read ALL columns + PK flags in a single round-trip ────
         var columnsSql = @"
             SELECT
+                c.TABLE_NAME,
                 c.COLUMN_NAME,
                 c.DATA_TYPE,
                 c.IS_NULLABLE,
@@ -54,33 +62,46 @@ public class SqlServerSchemaReader : ISchemaReader
                   ON tc.CONSTRAINT_NAME = ku.CONSTRAINT_NAME
                  AND tc.TABLE_SCHEMA = ku.TABLE_SCHEMA
                 WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
+                  AND tc.TABLE_SCHEMA = @schema
             ) pk ON pk.COLUMN_NAME = c.COLUMN_NAME
                 AND pk.TABLE_NAME = c.TABLE_NAME
                 AND pk.TABLE_SCHEMA = c.TABLE_SCHEMA
             WHERE c.TABLE_SCHEMA = @schema
-              AND c.TABLE_NAME = @tableName
-            ORDER BY c.ORDINAL_POSITION";
+            ORDER BY c.TABLE_NAME, c.ORDINAL_POSITION";
 
-        foreach (var table in tables)
         {
             await using var colCmd = new MsSqlCommand(columnsSql, connection);
             colCmd.Parameters.AddWithValue("@schema", schema);
-            colCmd.Parameters.AddWithValue("@tableName", table.TableName);
 
             await using var colReader = await colCmd.ExecuteReaderAsync();
             while (await colReader.ReadAsync())
             {
-                table.Columns.Add(new ColumnInfo
+                var tableName = colReader.GetString(0);
+
+                if (!columnsByTable.TryGetValue(tableName, out var columns))
                 {
-                    ColumnName = colReader.GetString(0),
-                    DataType = colReader.GetString(1),
-                    IsNullable = colReader.GetString(2) == "YES",
-                    MaxLength = colReader.IsDBNull(3) ? null : colReader.GetInt32(3),
-                    Precision = colReader.IsDBNull(4) ? null : Convert.ToInt32(colReader.GetByte(4)),
-                    Scale = colReader.IsDBNull(5) ? null : colReader.GetInt32(5),
-                    IsPrimaryKey = colReader.GetInt32(6) == 1
+                    columns = new List<ColumnInfo>();
+                    columnsByTable[tableName] = columns;
+                }
+
+                columns.Add(new ColumnInfo
+                {
+                    ColumnName = colReader.GetString(1),
+                    DataType = colReader.GetString(2),
+                    IsNullable = colReader.GetString(3) == "YES",
+                    MaxLength = colReader.IsDBNull(4) ? null : colReader.GetInt32(4),
+                    Precision = colReader.IsDBNull(5) ? null : Convert.ToInt32(colReader.GetByte(5)),
+                    Scale = colReader.IsDBNull(6) ? null : colReader.GetInt32(6),
+                    IsPrimaryKey = colReader.GetInt32(7) == 1
                 });
             }
+        }
+
+        // ── 3. Assign columns to their tables ───────────────────────
+        foreach (var table in tables)
+        {
+            if (columnsByTable.TryGetValue(table.TableName, out var cols))
+                table.Columns = cols;
         }
 
         return tables;
