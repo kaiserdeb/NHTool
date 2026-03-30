@@ -60,6 +60,8 @@ public class OracleSchemaReader : ISchemaReader
             return tables;
 
         // ── 2. Read ALL columns + PK flags in a single round-trip ────
+        // Join to ALL_TABLES with the same filters (excluding BIN$%, SYS_%) to
+        // avoid pulling columns for views or excluded system tables.
         var columnsSql = @"
             SELECT c.TABLE_NAME,
                    c.COLUMN_NAME,
@@ -70,6 +72,11 @@ public class OracleSchemaReader : ISchemaReader
                    c.DATA_SCALE,
                    CASE WHEN pk.COLUMN_NAME IS NOT NULL THEN 1 ELSE 0 END AS IS_PK
             FROM ALL_TAB_COLUMNS c
+            INNER JOIN ALL_TABLES t
+                ON c.OWNER = t.OWNER
+               AND c.TABLE_NAME = t.TABLE_NAME
+               AND t.TABLE_NAME NOT LIKE 'BIN$%'
+               AND t.TABLE_NAME NOT LIKE 'SYS_%'
             LEFT JOIN (
                 SELECT acc.COLUMN_NAME, acc.TABLE_NAME
                 FROM ALL_CONS_COLUMNS acc

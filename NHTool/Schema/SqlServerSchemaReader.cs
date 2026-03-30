@@ -44,6 +44,8 @@ public class SqlServerSchemaReader : ISchemaReader
             return tables;
 
         // ── 2. Read ALL columns + PK flags in a single round-trip ────
+        // Join to INFORMATION_SCHEMA.TABLES with TABLE_TYPE='BASE TABLE' to
+        // exclude views and other non-table objects from the result set.
         var columnsSql = @"
             SELECT
                 c.TABLE_NAME,
@@ -55,6 +57,10 @@ public class SqlServerSchemaReader : ISchemaReader
                 c.NUMERIC_SCALE,
                 CASE WHEN pk.COLUMN_NAME IS NOT NULL THEN 1 ELSE 0 END AS IS_PK
             FROM INFORMATION_SCHEMA.COLUMNS c
+            INNER JOIN INFORMATION_SCHEMA.TABLES t
+                ON c.TABLE_SCHEMA = t.TABLE_SCHEMA
+               AND c.TABLE_NAME = t.TABLE_NAME
+               AND t.TABLE_TYPE = 'BASE TABLE'
             LEFT JOIN (
                 SELECT ku.COLUMN_NAME, ku.TABLE_NAME, ku.TABLE_SCHEMA
                 FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc

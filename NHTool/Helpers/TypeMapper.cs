@@ -6,7 +6,9 @@ public static class TypeMapper
 {
     /// <summary>
     /// Maps a database column type to a C# type string.
-    /// Handles nullability for both value types (int?) and reference types (string?).
+    /// Appends ? only for nullable value types (int -> int?).
+    /// Reference types (string, byte[]) are left as-is to avoid CS8632 warnings
+    /// in projects with &lt;Nullable&gt;disable&lt;/Nullable&gt;.
     /// </summary>
     public static string GetClrType(ColumnInfo column, DatabaseProvider provider)
     {
@@ -17,12 +19,8 @@ public static class TypeMapper
             _ => "object"
         };
 
-        if (column.IsNullable)
-        {
-            // Value types: append ?  (int -> int?)
-            // Reference types: append ? (string -> string?)
+        if (column.IsNullable && !IsReferenceType(baseType))
             return baseType + "?";
-        }
 
         return baseType;
     }

@@ -74,7 +74,7 @@ public class SessionFactoryGenerator
         sb.AppendLine("            _sessionFactory = cfg.BuildSessionFactory();");
         sb.AppendLine("        }");
         sb.AppendLine();
-        sb.AppendLine("        return _sessionFactory;");
+        sb.AppendLine("        return _sessionFactory!;");
         sb.AppendLine("    }");
         sb.AppendLine("}");
 
