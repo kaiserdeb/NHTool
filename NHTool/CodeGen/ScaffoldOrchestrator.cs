@@ -37,6 +37,20 @@ public class ScaffoldOrchestrator
             return;
         }
 
+        // Skip tables with no columns (e.g. permission issues on catalog views)
+        var skipped = tables.Where(t => t.Columns.Count == 0).Select(t => t.TableName).ToList();
+        if (skipped.Count > 0)
+        {
+            Console.WriteLine($"Warning: skipping {skipped.Count} table(s) with no columns: {string.Join(", ", skipped)}");
+            tables = tables.Where(t => t.Columns.Count > 0).ToList();
+        }
+
+        if (tables.Count == 0)
+        {
+            Console.WriteLine("No tables with columns found. Check permissions on catalog views.");
+            return;
+        }
+
         Console.WriteLine($"Found {tables.Count} table(s). Generating code...");
 
         var entitiesDir = Path.Combine(outputDir, "Entities");
