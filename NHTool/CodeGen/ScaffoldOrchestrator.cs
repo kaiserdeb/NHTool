@@ -86,6 +86,17 @@ public class ScaffoldOrchestrator
 
         if (dryRun)
         {
+            var dryRunCompositeWarnings = BuildCompositeFkWarnings(tables);
+            if (dryRunCompositeWarnings.Count > 0)
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine("Warning: dry run detected composite foreign keys that require manual navigation mapping:");
+                foreach (var warning in dryRunCompositeWarnings)
+                    Console.WriteLine($"  - {warning}");
+                Console.ResetColor();
+                Console.WriteLine();
+            }
+
             Console.WriteLine();
             Console.WriteLine("[DRY RUN] The following files would be generated:");
             foreach (var table in tables)
@@ -98,6 +109,16 @@ public class ScaffoldOrchestrator
             Console.WriteLine();
             Console.WriteLine($"[DRY RUN] {tables.Count} entities would be generated. No files were written.");
             return;
+        }
+
+        var compositeWarnings = BuildCompositeFkWarnings(tables);
+        if (compositeWarnings.Count > 0)
+        {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine("Warning: some composite foreign keys require manual navigation mapping:");
+            foreach (var warning in compositeWarnings)
+                Console.WriteLine($"  - {warning}");
+            Console.ResetColor();
         }
 
         var entitiesDir = Path.Combine(outputDir, "Entities");
@@ -144,5 +165,29 @@ public class ScaffoldOrchestrator
 
         Console.WriteLine();
         Console.WriteLine($"Scaffold complete! {tables.Count} entities generated in '{outputDir}'.");
+    }
+
+    private static List<string> BuildCompositeFkWarnings(List<TableInfo> tables)
+    {
+        var warnings = new List<string>();
+
+        foreach (var table in tables)
+        {
+            var plan = AssociationNamingPlanner.Build(table);
+
+            foreach (var assoc in plan.ManyToOnes.Where(a => a.IsComposite))
+            {
+                warnings.Add(
+                    $"{table.TableName}: ManyToOne '{assoc.ConstraintName}' ({string.Join(", ", assoc.ColumnNames)}) was skipped.");
+            }
+
+            foreach (var assoc in plan.InverseCollections.Where(a => a.IsComposite))
+            {
+                warnings.Add(
+                    $"{table.TableName}: inverse collection '{assoc.ConstraintName}' ({string.Join(", ", assoc.KeyColumnNames)}) was skipped.");
+            }
+        }
+
+        return warnings;
     }
 }

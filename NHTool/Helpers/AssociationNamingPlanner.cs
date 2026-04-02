@@ -24,12 +24,14 @@ public static class AssociationNamingPlanner
 {
     public static TableAssociationPlan Build(TableInfo table)
     {
-        var fkColumnNames = table.FkColumnNames;
+        var fkColumnsCoveredByManyToOne = GetSingleColumnForeignKeyColumns(table.ForeignKeys);
         var reservedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var col in table.Columns)
         {
-            if (!col.IsPrimaryKey && fkColumnNames.Contains(col.ColumnName))
+            // Reserve scalar names that remain in the entity.
+            // Only skip single-column FK scalars that are replaced by ManyToOne navigation.
+            if (!col.IsPrimaryKey && fkColumnsCoveredByManyToOne.Contains(col.ColumnName))
                 continue;
 
             reservedNames.Add(NamingHelper.ToPropertyName(col.ColumnName));
@@ -141,5 +143,14 @@ public static class AssociationNamingPlanner
                 : fk.ConstraintName,
                 StringComparer.OrdinalIgnoreCase)
             .Select(g => g.ToList());
+    }
+
+    private static HashSet<string> GetSingleColumnForeignKeyColumns(IReadOnlyCollection<ForeignKeyInfo> foreignKeys)
+    {
+        return GroupByConstraint(foreignKeys)
+            .Select(g => g.Select(fk => fk.FkColumnName).Distinct(StringComparer.OrdinalIgnoreCase).ToList())
+            .Where(cols => cols.Count == 1)
+            .SelectMany(cols => cols)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 }

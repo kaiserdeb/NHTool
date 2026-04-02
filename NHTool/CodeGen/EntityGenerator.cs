@@ -98,10 +98,7 @@ public class EntityGenerator
                 continue;
 
             sb.AppendLine();
-            if (_legacyStyle)
-                sb.AppendLine($"{i2}public virtual IList<{assoc.ItemClassName}> {assoc.PropertyName} {{ get; set; }}");
-            else
-                sb.AppendLine($"{i2}public virtual IList<{assoc.ItemClassName}> {assoc.PropertyName} {{ get; set; }} = new List<{assoc.ItemClassName}>();");
+            sb.AppendLine($"{i2}public virtual IList<{assoc.ItemClassName}> {assoc.PropertyName} {{ get; set; }} = new List<{assoc.ItemClassName}>();");
         }
 
         sb.AppendLine($"{i1}}}");
