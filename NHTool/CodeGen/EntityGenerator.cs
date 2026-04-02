@@ -88,7 +88,7 @@ public class EntityGenerator
         {
             sb.AppendLine();
             if (_legacyStyle)
-                sb.AppendLine($"{i2}public virtual IList<{fkClassName}> {propName} {{ get; set; }}");
+                sb.AppendLine($"{i2}public virtual IList<{fkClassName}> {propName} {{ get; set; }} = new List<{fkClassName}>();");
             else
                 sb.AppendLine($"{i2}public virtual IList<{fkClassName}> {propName} {{ get; set; }} = new List<{fkClassName}>();");
         }
