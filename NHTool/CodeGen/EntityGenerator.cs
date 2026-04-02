@@ -47,6 +47,9 @@ public class EntityGenerator
         var i2 = indent + "    ";  // member level
 
         var associationPlan = AssociationNamingPlanner.Build(table);
+        var primaryKeyColumnNames = table.PrimaryKeys
+            .Select(pk => pk.ColumnName)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var fkColumnsCoveredByManyToOne = associationPlan.ManyToOnes
             .Where(a => !a.IsComposite)
             .SelectMany(a => a.ColumnNames)
@@ -84,11 +87,15 @@ public class EntityGenerator
             if (assoc.IsComposite)
                 continue;
 
+            var fkColumnName = assoc.ColumnNames[0];
+            if (primaryKeyColumnNames.Contains(fkColumnName))
+                continue;
+
             sb.AppendLine();
             if (_legacyStyle)
                 sb.AppendLine($"{i2}public virtual {assoc.ReferencedClassName} {assoc.PropertyName} {{ get; set; }}");
             else
-                sb.AppendLine($"{i2}public virtual {assoc.ReferencedClassName}? {assoc.PropertyName} {{ get; set; }}");
+                sb.AppendLine($"{i2}public virtual {assoc.ReferencedClassName} {assoc.PropertyName} {{ get; set; }} = default!;");
         }
 
         // Collection navigation properties (inverse side)

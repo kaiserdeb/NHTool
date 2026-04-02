@@ -202,6 +202,7 @@ public class Order
 - Los tipos referencia (`string`, `byte[]`) no agregan `?` ya que son nullable por defecto.
 - Las columnas FK se reemplazan por propiedades de navegacion `ManyToOne`.
 - Las relaciones inversas generan colecciones `IList<T>`.
+- En modo moderno, las navegaciones ManyToOne se generan como no-nullable con `= default!;` para evitar advertencias y mantener compatibilidad cuando NRT esta deshabilitado.
 
 ### Mapeos Mapping-by-Code
 
@@ -241,6 +242,7 @@ public class OrderMap : ClassMapping<Order>
         ManyToOne(x => x.Customer, m =>
         {
             m.Column("CUSTOMER_ID");
+            m.NotNullable(true);
         });
 
         Bag(x => x.OrderItems, c =>
@@ -260,6 +262,7 @@ La herramienta detecta Foreign Keys automaticamente y genera:
 **ManyToOne (lado FK):**
 - La columna FK (ej: `CUSTOMER_ID`) se reemplaza por una propiedad de navegacion al tipo referenciado.
 - El nombre de la propiedad se deriva de la columna FK quitando sufijos comunes (`_ID`, `_KEY`, `_FK`, `_CODE`).
+- Si la FK participa de la PK (shared-PK / one-to-one style), el `ManyToOne` se omite para evitar mapeo repetido de columna.
 
 | Columna FK          | Tabla Referenciada | Propiedad Generada     |
 |---------------------|--------------------|------------------------|
@@ -286,6 +289,10 @@ La herramienta detecta Foreign Keys automaticamente y genera:
 | PK no numerico (string, Guid)| `Generators.Assigned`                                                        |
 | PK compuesta                | `ComposedId(m => { m.Property(...); ... })`                                   |
 
+**FK compuestas (multi-columna):**
+- Las columnas escalares se mantienen y se mapean como `Property(...)`.
+- Las navegaciones `ManyToOne`/`Bag` para esas FKs se omiten y se informa warning para mapeo manual.
+
 **Ejemplo Oracle con secuencia:**
 
 ```csharp
@@ -301,6 +308,9 @@ Id(x => x.Id, m =>
 Se genera un archivo `NHibernateHelper.cs` que configura el `ISessionFactory` con todos los mapeos registrados:
 
 ```csharp
+using System;
+using System.Collections.Concurrent;
+using System.Threading;
 using NHibernate;
 using NHibernate.Cfg;
 using NHibernate.Mapping.ByCode;
@@ -310,29 +320,56 @@ namespace MyApp.Data;
 
 public static class NHibernateHelper
 {
-    private static ISessionFactory? _sessionFactory;
+    private static readonly ConcurrentDictionary<string, Lazy<ISessionFactory>> _sessionFactories =
+        new ConcurrentDictionary<string, Lazy<ISessionFactory>>(StringComparer.Ordinal);
 
     public static ISessionFactory BuildSessionFactory(string connectionString)
     {
-        if (_sessionFactory != null) return _sessionFactory;
+        if (string.IsNullOrWhiteSpace(connectionString))
+            throw new ArgumentException("Connection string cannot be null or empty.", nameof(connectionString));
 
-        var cfg = new Configuration();
-        cfg.DataBaseIntegration(db =>
+        var lazyFactory = _sessionFactories.GetOrAdd(connectionString, cs => new Lazy<ISessionFactory>(() =>
         {
-            db.Dialect<NHibernate.Dialect.MsSql2012Dialect>();
-            db.Driver<NHibernate.Driver.MicrosoftDataSqlClientDriver>();
-            db.ConnectionString = connectionString;
-        });
+            var cfg = new Configuration();
+            cfg.DataBaseIntegration(db =>
+            {
+                db.Dialect<NHibernate.Dialect.MsSql2012Dialect>();
+                db.Driver<NHibernate.Driver.MicrosoftDataSqlClientDriver>();
+                db.ConnectionString = cs;
+            });
 
-        var mapper = new ConventionModelMapper();
-        mapper.AddMapping<UserMap>();
-        mapper.AddMapping<OrderMap>();
-        mapper.AddMapping<OrderItemMap>();
+            var mapper = new ConventionModelMapper();
+            mapper.AddMapping<UserMap>();
+            mapper.AddMapping<OrderMap>();
+            mapper.AddMapping<OrderItemMap>();
 
-        cfg.AddMapping(mapper.CompileMappingForAllExplicitlyAddedEntities());
+            cfg.AddMapping(mapper.CompileMappingForAllExplicitlyAddedEntities());
+            return cfg.BuildSessionFactory();
+        }, LazyThreadSafetyMode.ExecutionAndPublication));
 
-        _sessionFactory = cfg.BuildSessionFactory();
-        return _sessionFactory;
+        try
+        {
+            return lazyFactory.Value;
+        }
+        catch
+        {
+            _sessionFactories.TryRemove(connectionString, out _);
+            throw;
+        }
+    }
+
+    public static bool DisposeSessionFactory(string connectionString)
+    {
+        if (string.IsNullOrWhiteSpace(connectionString))
+            return false;
+
+        if (!_sessionFactories.TryRemove(connectionString, out var lazyFactory))
+            return false;
+
+        if (lazyFactory.IsValueCreated)
+            lazyFactory.Value.Dispose();
+
+        return true;
     }
 }
 ```
@@ -475,7 +512,7 @@ Mapea los tipos de columna de la BD al tipo CLR mas apropiado, considerando:
 
 | Tipo Oracle                | Condicion                               | Tipo C#     |
 |----------------------------|-----------------------------------------|-------------|
-| `NUMBER`                   | Sin precision/escala                     | `int`       |
+| `NUMBER`                   | Sin precision/escala                     | `decimal`   |
 | `NUMBER`                   | `Scale=0`, `Precision<=10`              | `int`       |
 | `NUMBER`                   | `Scale=0`, `Precision>10`               | `long`      |
 | `NUMBER`                   | Otro caso                                | `decimal`   |
@@ -644,6 +681,9 @@ Connecting to SqlServer database...
 Filtered 28 -> 2 table(s) by --tables parameter.
 Found 2 table(s). Generating code...
 
+Warning: dry run detected composite foreign keys that require manual navigation mapping:
+  - ORDER_ITEMS: ManyToOne 'FK_ORDER_ITEMS_ORDERS' (ORDER_ID, ORDER_VERSION) was skipped.
+
 [DRY RUN] The following files would be generated:
   -> ./Generated/Entities/User.cs
   -> ./Generated/Mappings/UserMap.cs
@@ -675,6 +715,8 @@ Found 2 table(s). Generating code...
 - **No soporta herencia de tablas** (Table-per-hierarchy, Table-per-class, etc.).
 - **No FluentNHibernate**: todo el mapeo es con el API nativo `Mapping.ByCode` de NHibernate 5+.
 - **FKs entre schemas distintos** no se resuelven (ambas tablas deben estar en el mismo schema filtrado).
+- **FK compuestas**: las navegaciones se omiten y requieren mapeo manual (las columnas escalares si se generan).
+- **Shared-PK FK**: no se genera `ManyToOne` automatico para evitar repeated column mapping.
 
 ---
 

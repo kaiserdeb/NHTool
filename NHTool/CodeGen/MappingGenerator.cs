@@ -107,6 +107,9 @@ public class MappingGenerator
         sb.AppendLine();
 
         var associationPlan = AssociationNamingPlanner.Build(table);
+        var primaryKeyColumnNames = table.PrimaryKeys
+            .Select(pk => pk.ColumnName)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var fkColumnsCoveredByManyToOne = associationPlan.ManyToOnes
             .Where(a => !a.IsComposite)
             .SelectMany(a => a.ColumnNames)
@@ -142,10 +145,25 @@ public class MappingGenerator
                 continue;
             }
 
+            var fkColumnName = assoc.ColumnNames[0];
+            if (primaryKeyColumnNames.Contains(fkColumnName))
+            {
+                sb.AppendLine();
+                sb.AppendLine($"{i3}// Skipped shared-PK ManyToOne '{assoc.ConstraintName}' ({fkColumnName}) to avoid repeated column mapping.");
+                continue;
+            }
+
+            var fkColumn = table.Columns.FirstOrDefault(c =>
+                string.Equals(c.ColumnName, fkColumnName, StringComparison.OrdinalIgnoreCase));
+
             sb.AppendLine();
             sb.AppendLine($"{i3}ManyToOne(x => x.{assoc.PropertyName}, m =>");
             sb.AppendLine($"{i3}{{");
-            sb.AppendLine($"{i3}    m.Column(\"{assoc.ColumnNames[0]}\");");
+            sb.AppendLine($"{i3}    m.Column(\"{fkColumnName}\");");
+
+            if (fkColumn is not null && !fkColumn.IsNullable)
+                sb.AppendLine($"{i3}    m.NotNullable(true);");
+
             sb.AppendLine($"{i3}}});");
         }
 

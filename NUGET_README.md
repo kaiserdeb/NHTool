@@ -100,6 +100,7 @@ public class OrderMap : ClassMapping<Order>
         ManyToOne(x => x.Customer, m =>
         {
             m.Column("CUSTOMER_ID");
+            m.NotNullable(true);
         });
 
         Bag(x => x.OrderItems, c =>
@@ -117,6 +118,10 @@ public class OrderMap : ClassMapping<Order>
 ```csharp
 var factory = NHibernateHelper.BuildSessionFactory("Server=.;Database=MyDb;...");
 using var session = factory.OpenSession();
+
+// Optional cleanup APIs:
+NHibernateHelper.DisposeSessionFactory("Server=.;Database=MyDb;...");
+NHibernateHelper.DisposeAllSessionFactories();
 ```
 
 ## Supported Databases
@@ -129,14 +134,16 @@ using var session = factory.OpenSession();
 ## Key Features
 
 - **Foreign Keys** - Auto-detected ManyToOne + OneToMany navigation properties
+- **Composite FK handling** - Keeps scalar FK columns and warns that composite navigations require manual mapping
+- **Shared-PK safety** - Skips auto ManyToOne when FK column is part of PK to avoid repeated column mapping
 - **IDENTITY / Sequence** - SQL Server IDENTITY and Oracle sequences auto-detected
 - **Mapping-by-Code nativo** - No FluentNHibernate, uses NHibernate 5+ `ClassMapping<T>`
 - **Smart naming** - `USERS` -> `User`, `CUSTOMER_ID` -> `Customer` navigation (Humanizer)
 - **Composite PKs** - Detected and mapped with `ComposedId`
 - **PK strategy** - `Identity`, `Sequence`, `Native`, or `Assigned` based on column metadata
-- **Thread-safe** - Generated `NHibernateHelper` uses double-check locking
+- **Thread-safe session factory cache** - Generated `NHibernateHelper` uses `ConcurrentDictionary<string, Lazy<ISessionFactory>>`
 - **Table filtering** - `--tables` to include, `--exclude-tables` to exclude
-- **Dry run** - Preview generated files before writing
+- **Dry run** - Preview generated files and composite-FK warnings before writing
 - **Force overwrite** - `--force` to overwrite existing files
 - **Legacy mode** - `--use-legacy-style` for .NET Framework / C# 7.3 compatibility
 
