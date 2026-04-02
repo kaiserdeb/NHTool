@@ -110,7 +110,8 @@ public class ScaffoldOrchestrator
             Console.WriteLine($"Warning: output directory '{outputDir}' already contains .cs files.");
             Console.WriteLine("Use --force (-f) to overwrite existing files.");
             Console.ResetColor();
-            return;
+            throw new InvalidOperationException(
+                $"Scaffolding aborted because output directory '{outputDir}' already contains .cs files and --force was not specified.");
         }
 
         Directory.CreateDirectory(entitiesDir);
