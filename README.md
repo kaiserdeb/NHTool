@@ -14,6 +14,7 @@ Herramienta global de CLI en .NET 8 que genera entidades POCO y mapeos **NHibern
 - [Que se Genera](#que-se-genera)
   - [Entidades POCO](#entidades-poco)
   - [Mapeos Mapping-by-Code](#mapeos-mapping-by-code)
+  - [Propiedades de Navegacion](#propiedades-de-navegacion)
   - [NHibernateHelper](#nhibernatehelper)
 - [Arquitectura del Proyecto](#arquitectura-del-proyecto)
   - [Estructura de Carpetas](#estructura-de-carpetas)
@@ -27,6 +28,8 @@ Herramienta global de CLI en .NET 8 que genera entidades POCO y mapeos **NHibern
   - [SQL Server](#ejemplo-sql-server)
   - [Oracle](#ejemplo-oracle)
   - [Tablas Especificas](#ejemplo-tablas-especificas)
+  - [Excluir Tablas](#ejemplo-excluir-tablas)
+  - [Dry Run](#ejemplo-dry-run)
 - [Dependencias](#dependencias)
 - [Limitaciones Conocidas](#limitaciones-conocidas)
 - [Roadmap](#roadmap)
@@ -44,6 +47,12 @@ Herramienta global de CLI en .NET 8 que genera entidades POCO y mapeos **NHibern
 ---
 
 ## Instalacion
+
+### Desde NuGet
+
+```bash
+dotnet tool install --global nh-tool
+```
 
 ### Desde codigo fuente
 
@@ -87,6 +96,15 @@ nh-tool nh-scaffold "Data Source=myoracle:1521/ORCL;User Id=HR;Password=hr123;" 
 
 # Scaffold de tablas especificas
 nh-tool nh-scaffold "Server=.;Database=Northwind;..." sqlserver -t CUSTOMERS,ORDERS,ORDER_DETAILS -o ./Data -n Northwind.Data
+
+# Excluir tablas
+nh-tool nh-scaffold "Server=.;Database=MyDb;..." sqlserver -x AUDIT_LOG,TEMP_DATA
+
+# Previsualizar sin escribir archivos
+nh-tool nh-scaffold "Server=.;Database=MyDb;..." sqlserver --dry-run
+
+# Sobreescribir archivos existentes
+nh-tool nh-scaffold "Server=.;Database=MyDb;..." sqlserver --force
 ```
 
 ---
@@ -112,6 +130,10 @@ nh-tool nh-scaffold <connection-string> <provider> [opciones]
 | `--namespace <ns>`        | `-n`  | `MyApp.Data`   | Namespace raiz para las clases generadas                                |
 | `--schema <schema>`       | `-s`  | `dbo` / auto   | Filtro de schema/owner (ej: `dbo`, `HR`)                                |
 | `--tables <lista>`        | `-t`  | *(todas)*       | Lista de tablas separadas por coma (ej: `USERS,ORDERS,ORDER_ITEMS`)     |
+| `--exclude-tables <lista>`| `-x`  | *(ninguna)*     | Lista de tablas a excluir separadas por coma (ej: `AUDIT_LOG,TEMP_DATA`)|
+| `--use-legacy-style`      | `-l`  | `false`        | Genera codigo compatible con .NET Framework (C# 7.3)                    |
+| `--dry-run`               | `-d`  | `false`        | Previsualiza los archivos que se generarian sin escribirlos              |
+| `--force`                 | `-f`  | `false`        | Sobreescribe archivos existentes en el directorio de salida             |
 | `--help`                  | `-h`  | -              | Muestra la ayuda                                                        |
 
 ### Codigos de Salida
@@ -140,11 +162,11 @@ Al ejecutar el scaffold sobre una base de datos, se genera la siguiente estructu
 ```
 <output-dir>/
   Entities/
-    User.cs              # Clase POCO
+    User.cs              # Clase POCO con propiedades de navegacion
     Order.cs
     OrderItem.cs
   Mappings/
-    UserMap.cs           # ClassMapping<T> (Mapping-by-Code)
+    UserMap.cs           # ClassMapping<T> con ManyToOne/Bag
     OrderMap.cs
     OrderItemMap.cs
   NHibernateHelper.cs    # Configuracion de ISessionFactory
@@ -156,17 +178,21 @@ Cada tabla genera una clase con propiedades `virtual` (requisito de NHibernate p
 
 ```csharp
 using System;
+using System.Collections.Generic;
 
 namespace MyApp.Data;
 
-public class User
+public class Order
 {
     public virtual int Id { get; set; }
-    public virtual string FirstName { get; set; }
-    public virtual string LastName { get; set; }
-    public virtual string Email { get; set; }
-    public virtual DateTime? CreatedAt { get; set; }
-    public virtual bool IsActive { get; set; }
+    public virtual DateTime OrderDate { get; set; }
+    public virtual decimal TotalAmount { get; set; }
+
+    // ManyToOne - FK column (CUSTOMER_ID) replaced by navigation property
+    public virtual Customer Customer { get; set; }
+
+    // OneToMany - inverse collection
+    public virtual IList<OrderItem> OrderItems { get; set; } = new List<OrderItem>();
 }
 ```
 
@@ -174,6 +200,9 @@ public class User
 - Todas las propiedades son `virtual` para soportar lazy loading via proxies.
 - Los tipos nullable de la BD se traducen a tipos nullable de C# (ej: `DateTime?`, `int?`).
 - Los tipos referencia (`string`, `byte[]`) no agregan `?` ya que son nullable por defecto.
+- Las columnas FK se reemplazan por propiedades de navegacion `ManyToOne`.
+- Las relaciones inversas generan colecciones `IList<T>`.
+- En modo moderno, las navegaciones ManyToOne se generan como no-nullable con `= default!;` para evitar advertencias y mantener compatibilidad cuando NRT esta deshabilitado.
 
 ### Mapeos Mapping-by-Code
 
@@ -185,56 +214,92 @@ using NHibernate.Mapping.ByCode.Conformist;
 
 namespace MyApp.Data.Mappings;
 
-public class UserMap : ClassMapping<User>
+public class OrderMap : ClassMapping<Order>
 {
-    public UserMap()
+    public OrderMap()
     {
         Schema("dbo");
-        Table("USERS");
+        Table("ORDERS");
 
         Id(x => x.Id, m =>
         {
             m.Column("ID");
-            m.Generator(Generators.Native);
+            m.Generator(Generators.Identity);  // Detected from SQL Server IDENTITY
         });
 
-        Property(x => x.FirstName, m =>
+        Property(x => x.OrderDate, m =>
         {
-            m.Column("FIRST_NAME");
+            m.Column("ORDER_DATE");
             m.NotNullable(true);
-            m.Length(100);
         });
 
-        Property(x => x.Email, m =>
+        Property(x => x.TotalAmount, m =>
         {
-            m.Column("EMAIL");
-            m.Length(255);
+            m.Column("TOTAL_AMOUNT");
+            m.NotNullable(true);
         });
 
-        Property(x => x.CreatedAt, m =>
+        ManyToOne(x => x.Customer, m =>
         {
-            m.Column("CREATED_AT");
+            m.Column("CUSTOMER_ID");
+            m.NotNullable(true);
         });
+
+        Bag(x => x.OrderItems, c =>
+        {
+            c.Key(k => k.Column("ORDER_ID"));
+            c.Inverse(true);
+            c.Lazy(CollectionLazy.Lazy);
+        }, r => r.OneToMany());
     }
 }
 ```
 
+### Propiedades de Navegacion
+
+La herramienta detecta Foreign Keys automaticamente y genera:
+
+**ManyToOne (lado FK):**
+- La columna FK (ej: `CUSTOMER_ID`) se reemplaza por una propiedad de navegacion al tipo referenciado.
+- El nombre de la propiedad se deriva de la columna FK quitando sufijos comunes (`_ID`, `_KEY`, `_FK`, `_CODE`).
+- Si la FK participa de la PK (shared-PK / one-to-one style), el `ManyToOne` se omite para evitar mapeo repetido de columna.
+
+| Columna FK          | Tabla Referenciada | Propiedad Generada     |
+|---------------------|--------------------|------------------------|
+| `CUSTOMER_ID`       | `CUSTOMERS`        | `Customer`             |
+| `CREATED_BY_USER_ID`| `USERS`            | `CreatedByUser`        |
+| `CATEGORY_ID`       | `CATEGORIES`       | `Category`             |
+
+**OneToMany (lado inverso):**
+- Se genera una coleccion `IList<T>` en la entidad padre con el nombre plural de la tabla hija.
+- El mapeo usa `Bag` con `Inverse(true)` y `Lazy(CollectionLazy.Lazy)`.
+
+| Tabla Hija     | Propiedad Generada en Padre |
+|----------------|-----------------------------|
+| `ORDER_ITEMS`  | `IList<OrderItem> OrderItems`|
+| `ADDRESSES`    | `IList<Address> Addresses`   |
+
 **Mapeo de Primary Keys:**
 
-| Escenario        | Estrategia                                        |
-|------------------|---------------------------------------------------|
-| PK simple        | `Id(x => x.Prop, m => { m.Generator(Native); })` |
-| PK compuesta     | `ComposedId(m => { m.Property(...); ... })`       |
-| Sin PK           | No genera bloque de Id                             |
+| Escenario                   | Estrategia                                                                    |
+|-----------------------------|-------------------------------------------------------------------------------|
+| PK con IDENTITY (SQL Server)| `Generators.Identity`                                                         |
+| PK con secuencia (Oracle)   | `Generators.Sequence` con nombre de secuencia                                 |
+| PK numerico sin IDENTITY    | `Generators.Native`                                                           |
+| PK no numerico (string, Guid)| `Generators.Assigned`                                                        |
+| PK compuesta                | `ComposedId(m => { m.Property(...); ... })`                                   |
 
-**Ejemplo de PK compuesta:**
+**FK compuestas (multi-columna):**
+- Las columnas escalares se mantienen y se mapean como `Property(...)`.
+- Las navegaciones `ManyToOne`/`Bag` para esas FKs se omiten y se informa warning para mapeo manual.
+
+**Ejemplo Oracle con secuencia:**
 
 ```csharp
-// Tabla ORDER_ITEMS con PK compuesta (ORDER_ID, PRODUCT_ID)
-ComposedId(m =>
+Id(x => x.Id, m =>
 {
-    m.Property(x => x.OrderId, p => p.Column("ORDER_ID"));
-    m.Property(x => x.ProductId, p => p.Column("PRODUCT_ID"));
+    m.Column("ID");
+    m.Generator(Generators.Sequence, g => g.Params(new { sequence = "SEQ_EMPLOYEES" }));
 });
 ```
 
@@ -243,6 +308,9 @@ ComposedId(m =>
 Se genera un archivo `NHibernateHelper.cs` que configura el `ISessionFactory` con todos los mapeos registrados:
 
 ```csharp
+using System;
+using System.Collections.Concurrent;
+using System.Threading;
 using NHibernate;
 using NHibernate.Cfg;
 using NHibernate.Mapping.ByCode;
@@ -252,29 +320,56 @@ namespace MyApp.Data;
 
 public static class NHibernateHelper
 {
-    private static ISessionFactory? _sessionFactory;
+    private static readonly ConcurrentDictionary<string, Lazy<ISessionFactory>> _sessionFactories =
+        new ConcurrentDictionary<string, Lazy<ISessionFactory>>(StringComparer.Ordinal);
 
     public static ISessionFactory BuildSessionFactory(string connectionString)
     {
-        if (_sessionFactory != null) return _sessionFactory;
+        if (string.IsNullOrWhiteSpace(connectionString))
+            throw new ArgumentException("Connection string cannot be null or empty.", nameof(connectionString));
 
-        var cfg = new Configuration();
-        cfg.DataBaseIntegration(db =>
+        var lazyFactory = _sessionFactories.GetOrAdd(connectionString, cs => new Lazy<ISessionFactory>(() =>
         {
-            db.Dialect<NHibernate.Dialect.MsSql2012Dialect>();
-            db.Driver<NHibernate.Driver.MicrosoftDataSqlClientDriver>();
-            db.ConnectionString = connectionString;
-        });
+            var cfg = new Configuration();
+            cfg.DataBaseIntegration(db =>
+            {
+                db.Dialect<NHibernate.Dialect.MsSql2012Dialect>();
+                db.Driver<NHibernate.Driver.MicrosoftDataSqlClientDriver>();
+                db.ConnectionString = cs;
+            });
 
-        var mapper = new ConventionModelMapper();
-        mapper.AddMapping<UserMap>();
-        mapper.AddMapping<OrderMap>();
-        mapper.AddMapping<OrderItemMap>();
+            var mapper = new ConventionModelMapper();
+            mapper.AddMapping<UserMap>();
+            mapper.AddMapping<OrderMap>();
+            mapper.AddMapping<OrderItemMap>();
 
-        cfg.AddMapping(mapper.CompileMappingForAllExplicitlyAddedEntities());
+            cfg.AddMapping(mapper.CompileMappingForAllExplicitlyAddedEntities());
+            return cfg.BuildSessionFactory();
+        }, LazyThreadSafetyMode.ExecutionAndPublication));
 
-        _sessionFactory = cfg.BuildSessionFactory();
-        return _sessionFactory;
+        try
+        {
+            return lazyFactory.Value;
+        }
+        catch
+        {
+            _sessionFactories.TryRemove(connectionString, out _);
+            throw;
+        }
+    }
+
+    public static bool DisposeSessionFactory(string connectionString)
+    {
+        if (string.IsNullOrWhiteSpace(connectionString))
+            return false;
+
+        if (!_sessionFactories.TryRemove(connectionString, out var lazyFactory))
+            return false;
+
+        if (lazyFactory.IsValueCreated)
+            lazyFactory.Value.Dispose();
+
+        return true;
     }
 }
 ```
@@ -307,25 +402,26 @@ nh-tool/
     Program.cs                      # Entry point - CLI con System.CommandLine
 
     Models/
-      TableInfo.cs                  # Modelo: tabla con schema, nombre y columnas
-      ColumnInfo.cs                 # Modelo: columna con tipo, nullable, PK, etc.
+      TableInfo.cs                  # Modelo: tabla con schema, nombre, columnas y FKs
+      ColumnInfo.cs                 # Modelo: columna con tipo, nullable, PK, Identity, etc.
+      ForeignKeyInfo.cs             # Modelo: FK con tablas y columnas origen/destino
       DatabaseProvider.cs           # Enum Oracle|SqlServer + parser de string
 
     Schema/
-      ISchemaReader.cs              # Interfaz del lector de esquema
-      OracleSchemaReader.cs         # Implementacion: ALL_TABLES + ALL_TAB_COLUMNS
-      SqlServerSchemaReader.cs      # Implementacion: INFORMATION_SCHEMA
+      ISchemaReader.cs              # Interfaz: ReadTablesAsync + ReadForeignKeysAsync
+      OracleSchemaReader.cs         # ALL_TABLES, ALL_TAB_COLUMNS, ALL_CONSTRAINTS, ALL_TAB_IDENTITY_COLS
+      SqlServerSchemaReader.cs      # INFORMATION_SCHEMA + sys.columns (IDENTITY)
       SchemaReaderFactory.cs        # Factory que selecciona reader por provider
 
     Helpers/
-      NamingHelper.cs               # Conversion DB names -> PascalCase (Humanizer)
+      NamingHelper.cs               # Conversion DB names -> PascalCase + nombres de navegacion
       TypeMapper.cs                 # Conversion DB types -> CLR types
 
     CodeGen/
-      EntityGenerator.cs            # Genera clases POCO (.cs)
-      MappingGenerator.cs           # Genera ClassMapping<T> (.cs)
+      EntityGenerator.cs            # Genera clases POCO con propiedades de navegacion
+      MappingGenerator.cs           # Genera ClassMapping<T> con ManyToOne/Bag
       SessionFactoryGenerator.cs    # Genera NHibernateHelper.cs
-      ScaffoldOrchestrator.cs       # Orquesta el flujo completo
+      ScaffoldOrchestrator.cs       # Orquesta el flujo completo (FK wiring, filtros, etc.)
 ```
 
 ### Diagrama de Flujo
@@ -337,32 +433,35 @@ nh-tool/
  ScaffoldOrchestrator.RunAsync(...)
   |
   |-- 1. SchemaReaderFactory.Create(provider)
-  |       |-- OracleSchemaReader     (ALL_TABLES, ALL_TAB_COLUMNS, ALL_CONSTRAINTS)
-  |       '-- SqlServerSchemaReader  (INFORMATION_SCHEMA.TABLES, .COLUMNS, .KEY_COLUMN_USAGE)
+  |       |-- OracleSchemaReader     (ALL_TABLES, ALL_TAB_COLUMNS, ALL_CONSTRAINTS, ALL_TAB_IDENTITY_COLS)
+  |       '-- SqlServerSchemaReader  (INFORMATION_SCHEMA + sys.columns)
   |
   |-- 2. reader.ReadTablesAsync(connectionString, schema)
-  |       '-- Retorna List<TableInfo> con columnas y PKs
+  |       '-- Retorna List<TableInfo> con columnas, PKs, Identity/Sequence
   |
-  |-- 3. Filtro por --tables (si se especifica)
-  |       '-- Interseccion case-insensitive + warnings de tablas no encontradas
+  |-- 3. Filtros: --tables (incluir) y --exclude-tables (excluir)
   |
-  |-- 4. EntityGenerator.Generate(table, namespace)
-  |       '-- Genera POCO con propiedades virtual
+  |-- 4. reader.ReadForeignKeysAsync(connectionString, schema)
+  |       '-- Retorna List<ForeignKeyInfo>, se asignan a ForeignKeys/InverseForeignKeys
   |
-  |-- 5. MappingGenerator.Generate(table, namespace)
-  |       '-- Genera ClassMapping<T> con Id/ComposedId/Property
+  |-- 5. EntityGenerator.Generate(table, namespace)
+  |       '-- POCO con escalares + ManyToOne + IList<T> collections
   |
-  '-- 6. SessionFactoryGenerator.Generate(tables, namespace)
-          '-- Genera NHibernateHelper.cs con ISessionFactory
+  |-- 6. MappingGenerator.Generate(table, namespace)
+  |       '-- ClassMapping<T> con Id (Identity/Sequence/Native/Assigned),
+  |          Property, ManyToOne, Bag
+  |
+  '-- 7. SessionFactoryGenerator.Generate(tables, namespace)
+          '-- NHibernateHelper.cs con ISessionFactory thread-safe
 ```
 
 ### Componentes Principales
 
 #### `Program.cs` - CLI Engine
 
-Usa `System.CommandLine` para parsear argumentos y opciones. Define el comando `nh-scaffold` con:
+Usa `System.CommandLine` con handler basado en `InvocationContext` para soportar mas de 8 parametros. Define el comando `nh-scaffold` con:
 - 2 argumentos posicionales: `connection-string` y `provider`
-- 4 opciones: `--output`, `--namespace`, `--schema`, `--tables`
+- 8 opciones: `--output`, `--namespace`, `--schema`, `--tables`, `--exclude-tables`, `--use-legacy-style`, `--dry-run`, `--force`
 
 #### `ISchemaReader` - Lectura de Esquema
 
@@ -370,43 +469,40 @@ Usa `System.CommandLine` para parsear argumentos y opciones. Define el comando `
 public interface ISchemaReader
 {
     Task<List<TableInfo>> ReadTablesAsync(string connectionString, string? schemaFilter = null);
+    Task<List<ForeignKeyInfo>> ReadForeignKeysAsync(string connectionString, string? schemaFilter = null);
 }
 ```
 
-| Implementacion           | Origen de Datos                                              |
-|--------------------------|--------------------------------------------------------------|
-| `OracleSchemaReader`     | `ALL_TABLES`, `ALL_TAB_COLUMNS`, `ALL_CONSTRAINTS`           |
-| `SqlServerSchemaReader`  | `INFORMATION_SCHEMA.TABLES`, `.COLUMNS`, `.KEY_COLUMN_USAGE` |
+| Implementacion           | Origen de Datos                                                        |
+|--------------------------|------------------------------------------------------------------------|
+| `OracleSchemaReader`     | `ALL_TABLES`, `ALL_TAB_COLUMNS`, `ALL_CONSTRAINTS`, `ALL_TAB_IDENTITY_COLS` |
+| `SqlServerSchemaReader`  | `INFORMATION_SCHEMA.TABLES`, `.COLUMNS`, `.KEY_COLUMN_USAGE`, `sys.columns` |
 
 Ambos readers:
-1. Listan todas las tablas del schema.
-2. Para cada tabla, consultan las columnas con tipo, nullability y longitud.
-3. Detectan Primary Keys mediante joins a las tablas de constraints.
+1. Listan todas las tablas del schema en una sola query.
+2. Leen todas las columnas con tipo, nullability, longitud y PKs en una sola round-trip.
+3. Detectan columnas IDENTITY (SQL Server) o Identity con secuencias (Oracle 12c+).
+4. Leen Foreign Keys con tablas/columnas origen y destino.
 
 #### `NamingHelper` - Pluralizacion y Formato
 
 Usa la libreria **Humanizer** para:
 
-| Entrada DB        | Metodo          | Salida C#      |
-|-------------------|-----------------|----------------|
-| `USERS`           | `ToClassName`   | `User`         |
-| `ORDER_ITEMS`     | `ToClassName`   | `OrderItem`    |
-| `PRODUCT`         | `ToClassName`   | `Product`      |
-| `USER_NAME`       | `ToPropertyName`| `UserName`     |
-| `ID`              | `ToPropertyName`| `Id`           |
-| `CREATED_AT`      | `ToPropertyName`| `CreatedAt`    |
-
-El proceso:
-1. Convierte a minusculas: `ORDER_ITEMS` -> `order_items`
-2. Reemplaza `_` por espacios: `order items`
-3. Pascaliza: `OrderItems`
-4. Singulariza: `OrderItem`
+| Entrada DB              | Metodo                     | Salida C#          |
+|-------------------------|----------------------------|--------------------|
+| `USERS`                 | `ToClassName`              | `User`             |
+| `ORDER_ITEMS`           | `ToClassName`              | `OrderItem`        |
+| `USER_NAME`             | `ToPropertyName`           | `UserName`         |
+| `CUSTOMER_ID`           | `ToManyToOnePropertyName`  | `Customer`         |
+| `CREATED_BY_USER_ID`    | `ToManyToOnePropertyName`  | `CreatedByUser`    |
+| `ORDER_ITEMS`           | `ToCollectionPropertyName` | `OrderItems`       |
 
 #### `TypeMapper` - Mapeo de Tipos de Datos
 
 Mapea los tipos de columna de la BD al tipo CLR mas apropiado, considerando:
 - **Precision y escala** para tipos numericos (Oracle `NUMBER`).
 - **Nullability**: agrega `?` a value types cuando la columna admite nulos.
+- **NRT-safe**: no agrega `?` a tipos referencia para evitar CS8632 en proyectos sin NRT.
 
 ---
 
@@ -416,6 +512,7 @@ Mapea los tipos de columna de la BD al tipo CLR mas apropiado, considerando:
 
 | Tipo Oracle                | Condicion                               | Tipo C#     |
 |----------------------------|-----------------------------------------|-------------|
+| `NUMBER`                   | Sin precision/escala                     | `decimal`   |
 | `NUMBER`                   | `Scale=0`, `Precision<=10`              | `int`       |
 | `NUMBER`                   | `Scale=0`, `Precision>10`               | `long`      |
 | `NUMBER`                   | Otro caso                                | `decimal`   |
@@ -459,16 +556,18 @@ Mapea los tipos de columna de la BD al tipo CLR mas apropiado, considerando:
 
 ## Convenciones de Nombres
 
-| Elemento          | Convencion                                    | Ejemplo                          |
-|-------------------|-----------------------------------------------|----------------------------------|
-| Nombre de clase   | PascalCase, singular                           | `USERS` -> `User`               |
-| Nombre de archivo | `{ClassName}.cs`                               | `User.cs`                       |
-| Propiedades       | PascalCase                                     | `FIRST_NAME` -> `FirstName`     |
-| Mapeos            | `{ClassName}Map.cs`                            | `UserMap.cs`                    |
-| Namespace entidad | `<namespace>`                                  | `MyApp.Data`                    |
-| Namespace mapeo   | `<namespace>.Mappings`                         | `MyApp.Data.Mappings`           |
-| Carpeta entidades | `<output>/Entities/`                           | `./Generated/Entities/`         |
-| Carpeta mapeos    | `<output>/Mappings/`                           | `./Generated/Mappings/`         |
+| Elemento              | Convencion                                    | Ejemplo                            |
+|-----------------------|-----------------------------------------------|------------------------------------|
+| Nombre de clase       | PascalCase, singular                           | `USERS` -> `User`                 |
+| Nombre de archivo     | `{ClassName}.cs`                               | `User.cs`                         |
+| Propiedades escalares | PascalCase                                     | `FIRST_NAME` -> `FirstName`       |
+| Propiedad ManyToOne   | FK sin sufijo `_ID/_KEY/_FK/_CODE`             | `CUSTOMER_ID` -> `Customer`       |
+| Propiedad coleccion   | PascalCase plural                              | `ORDER_ITEMS` -> `OrderItems`     |
+| Mapeos                | `{ClassName}Map.cs`                            | `UserMap.cs`                      |
+| Namespace entidad     | `<namespace>`                                  | `MyApp.Data`                      |
+| Namespace mapeo       | `<namespace>.Mappings`                         | `MyApp.Data.Mappings`             |
+| Carpeta entidades     | `<output>/Entities/`                           | `./Generated/Entities/`           |
+| Carpeta mapeos        | `<output>/Mappings/`                           | `./Generated/Mappings/`           |
 
 ---
 
@@ -542,10 +641,57 @@ Found 3 table(s). Generating code...
 Scaffold complete! 3 entities generated in './Output'.
 ```
 
-Si alguna tabla no existe, se muestra un warning:
+### Ejemplo Excluir Tablas
+
+Excluir tablas de auditoria y temporales:
+
+```bash
+nh-tool nh-scaffold \
+  "Server=.;Database=MyDb;Trusted_Connection=true;TrustServerCertificate=true" \
+  sqlserver \
+  -x AUDIT_LOG,TEMP_DATA,MIGRATION_HISTORY \
+  -o ./Generated \
+  -n MyApp.Data
+```
+
+Salida:
 
 ```
-Warning: tables not found in schema: NONEXISTENT_TABLE
+Connecting to SqlServer database...
+Excluded 3 table(s) by --exclude-tables parameter.
+Found 25 table(s). Generating code...
+  ...
+Scaffold complete! 25 entities generated in './Generated'.
+```
+
+### Ejemplo Dry Run
+
+Previsualizar los archivos que se generarian:
+
+```bash
+nh-tool nh-scaffold \
+  "Server=.;Database=MyDb;..." sqlserver \
+  --dry-run -t USERS,ORDERS
+```
+
+Salida:
+
+```
+Connecting to SqlServer database...
+Filtered 28 -> 2 table(s) by --tables parameter.
+Found 2 table(s). Generating code...
+
+Warning: dry run detected composite foreign keys that require manual navigation mapping:
+  - ORDER_ITEMS: ManyToOne 'FK_ORDER_ITEMS_ORDERS' (ORDER_ID, ORDER_VERSION) was skipped.
+
+[DRY RUN] The following files would be generated:
+  -> ./Generated/Entities/User.cs
+  -> ./Generated/Mappings/UserMap.cs
+  -> ./Generated/Entities/Order.cs
+  -> ./Generated/Mappings/OrderMap.cs
+  -> ./Generated/NHibernateHelper.cs
+
+[DRY RUN] 2 entities would be generated. No files were written.
 ```
 
 ---
@@ -564,23 +710,25 @@ Warning: tables not found in schema: NONEXISTENT_TABLE
 
 ## Limitaciones Conocidas
 
-- **No genera relaciones (FK):** No se crean propiedades de navegacion (`ManyToOne`, `Bag`, `Set`). Solo se mapean columnas escalares.
 - **No genera indices ni unique constraints.**
 - **No soporta vistas**, solo tablas base (`BASE TABLE` / `ALL_TABLES`).
 - **No soporta herencia de tablas** (Table-per-hierarchy, Table-per-class, etc.).
-- **Generador de PK fijo en `Native`**: no detecta secuencias Oracle ni columnas `IDENTITY` de SQL Server automaticamente.
 - **No FluentNHibernate**: todo el mapeo es con el API nativo `Mapping.ByCode` de NHibernate 5+.
+- **FKs entre schemas distintos** no se resuelven (ambas tablas deben estar en el mismo schema filtrado).
+- **FK compuestas**: las navegaciones se omiten y requieren mapeo manual (las columnas escalares si se generan).
+- **Shared-PK FK**: no se genera `ManyToOne` automatico para evitar repeated column mapping.
 
 ---
 
 ## Roadmap
 
-- [ ] Soporte para **Foreign Keys** y generacion de propiedades de navegacion (`ManyToOne`, `OneToMany`).
-- [ ] Deteccion de **secuencias Oracle** y generacion de `Generators.Sequence("SEQ_NAME")`.
-- [ ] Deteccion de **IDENTITY** en SQL Server y generacion de `Generators.Identity`.
+- [x] Soporte para **Foreign Keys** y generacion de propiedades de navegacion (`ManyToOne`, `OneToMany`).
+- [x] Deteccion de **secuencias Oracle** y generacion de `Generators.Sequence("SEQ_NAME")`.
+- [x] Deteccion de **IDENTITY** en SQL Server y generacion de `Generators.Identity`.
+- [x] Opcion `--exclude-tables` para excluir tablas especificas.
+- [x] Modo `--dry-run` para previsualizar sin escribir archivos.
+- [x] Opcion `--force` para sobreescribir archivos existentes.
+- [x] Modo `--use-legacy-style` para compatibilidad con .NET Framework (C# 7.3).
 - [ ] Soporte para **PostgreSQL** (`Npgsql`).
 - [ ] Soporte para **MySQL/MariaDB**.
-- [ ] Opcion `--force` para sobreescribir archivos existentes con confirmacion.
-- [ ] Opcion `--exclude-tables` para excluir tablas especificas.
 - [ ] Generacion de **unit tests** base para validar los mapeos.
-- [ ] Modo `--dry-run` para previsualizar sin escribir archivos.

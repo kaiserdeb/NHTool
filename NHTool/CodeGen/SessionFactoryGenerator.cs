@@ -19,6 +19,9 @@ public class SessionFactoryGenerator
     {
         var sb = new StringBuilder();
 
+        sb.AppendLine("using System;");
+        sb.AppendLine("using System.Collections.Concurrent;");
+        sb.AppendLine("using System.Threading;");
         sb.AppendLine("using NHibernate;");
         sb.AppendLine("using NHibernate.Cfg;");
         sb.AppendLine("using NHibernate.Mapping.ByCode;");
@@ -46,18 +49,20 @@ public class SessionFactoryGenerator
 
         sb.AppendLine($"{i1}public static class NHibernateHelper");
         sb.AppendLine($"{i1}{{");
-        sb.AppendLine($"{i2}private static readonly object _lock = new object();");
-        sb.AppendLine($"{i2}private static ISessionFactory _sessionFactory;");
+        sb.AppendLine($"{i2}private static readonly ConcurrentDictionary<string, Lazy<ISessionFactory>> _sessionFactories =");
+        sb.AppendLine($"{i2}    new ConcurrentDictionary<string, Lazy<ISessionFactory>>(StringComparer.Ordinal);");
         sb.AppendLine();
         sb.AppendLine($"{i2}public static ISessionFactory BuildSessionFactory(string connectionString)");
         sb.AppendLine($"{i2}{{");
-        sb.AppendLine($"{i3}if (_sessionFactory != null) return _sessionFactory;");
+        sb.AppendLine($"{i3}if (string.IsNullOrWhiteSpace(connectionString))");
+        sb.AppendLine($"{i3}    throw new ArgumentException(\"Connection string cannot be null or empty.\", nameof(connectionString));");
         sb.AppendLine();
-        sb.AppendLine($"{i3}lock (_lock)");
+        sb.AppendLine();
+        sb.AppendLine($"{i3}var lazyFactory = _sessionFactories.GetOrAdd(connectionString, cs =>");
         sb.AppendLine($"{i3}{{");
-        sb.AppendLine($"{i3}    if (_sessionFactory != null) return _sessionFactory;");
-        sb.AppendLine();
-        sb.AppendLine($"{i3}    var cfg = new Configuration();");
+        sb.AppendLine($"{i3}    return new Lazy<ISessionFactory>(() =>");
+        sb.AppendLine($"{i3}    {{");
+        sb.AppendLine($"{i3}        var cfg = new Configuration();");
 
         var driverClass = _provider switch
         {
@@ -73,28 +78,60 @@ public class SessionFactoryGenerator
             _ => "NHibernate.Dialect.MsSql2012Dialect"
         };
 
-        sb.AppendLine($"{i3}    cfg.DataBaseIntegration(db =>");
-        sb.AppendLine($"{i3}    {{");
-        sb.AppendLine($"{i3}        db.Dialect<{dialect}>();");
-        sb.AppendLine($"{i3}        db.Driver<{driverClass}>();");
-        sb.AppendLine($"{i3}        db.ConnectionString = connectionString;");
-        sb.AppendLine($"{i3}    }});");
+        sb.AppendLine($"{i3}        cfg.DataBaseIntegration(db =>");
+        sb.AppendLine($"{i3}        {{");
+        sb.AppendLine($"{i3}            db.Dialect<{dialect}>();");
+        sb.AppendLine($"{i3}            db.Driver<{driverClass}>();");
+        sb.AppendLine($"{i3}            db.ConnectionString = cs;");
+        sb.AppendLine($"{i3}        }});");
         sb.AppendLine();
-        sb.AppendLine($"{i3}    var mapper = new ConventionModelMapper();");
+        sb.AppendLine($"{i3}        var mapper = new ConventionModelMapper();");
 
         foreach (var table in tables)
         {
             var className = NamingHelper.ToClassName(table.TableName);
-            sb.AppendLine($"{i3}    mapper.AddMapping<{className}Map>();");
+            sb.AppendLine($"{i3}        mapper.AddMapping<{className}Map>();");
         }
 
         sb.AppendLine();
-        sb.AppendLine($"{i3}    cfg.AddMapping(mapper.CompileMappingForAllExplicitlyAddedEntities());");
+        sb.AppendLine($"{i3}        cfg.AddMapping(mapper.CompileMappingForAllExplicitlyAddedEntities());");
         sb.AppendLine();
-        sb.AppendLine($"{i3}    _sessionFactory = cfg.BuildSessionFactory();");
+        sb.AppendLine($"{i3}        return cfg.BuildSessionFactory();");
+        sb.AppendLine($"{i3}    }}, LazyThreadSafetyMode.ExecutionAndPublication);");
+        sb.AppendLine($"{i3}}});");
+        sb.AppendLine();
+        sb.AppendLine($"{i3}try");
+        sb.AppendLine($"{i3}{{");
+        sb.AppendLine($"{i3}    return lazyFactory.Value;");
         sb.AppendLine($"{i3}}}");
+        sb.AppendLine($"{i3}catch");
+        sb.AppendLine($"{i3}{{");
+        sb.AppendLine($"{i3}    _sessionFactories.TryRemove(connectionString, out _);");
+        sb.AppendLine($"{i3}    throw;");
+        sb.AppendLine($"{i3}}}");
+        sb.AppendLine($"{i2}}}");
         sb.AppendLine();
-        sb.AppendLine($"{i3}return _sessionFactory;");
+        sb.AppendLine($"{i2}public static bool DisposeSessionFactory(string connectionString)");
+        sb.AppendLine($"{i2}{{");
+        sb.AppendLine($"{i3}if (string.IsNullOrWhiteSpace(connectionString))");
+        sb.AppendLine($"{i3}    return false;");
+        sb.AppendLine();
+        sb.AppendLine($"{i3}if (!_sessionFactories.TryRemove(connectionString, out var lazyFactory))");
+        sb.AppendLine($"{i3}    return false;");
+        sb.AppendLine();
+        sb.AppendLine($"{i3}if (lazyFactory.IsValueCreated)");
+        sb.AppendLine($"{i3}    lazyFactory.Value.Dispose();");
+        sb.AppendLine();
+        sb.AppendLine($"{i3}return true;");
+        sb.AppendLine($"{i2}}}");
+        sb.AppendLine();
+        sb.AppendLine($"{i2}public static void DisposeAllSessionFactories()");
+        sb.AppendLine($"{i2}{{");
+        sb.AppendLine($"{i3}foreach (var pair in _sessionFactories.ToArray())");
+        sb.AppendLine($"{i3}{{");
+        sb.AppendLine($"{i3}    if (_sessionFactories.TryRemove(pair.Key, out var lazyFactory) && lazyFactory.IsValueCreated)");
+        sb.AppendLine($"{i3}        lazyFactory.Value.Dispose();");
+        sb.AppendLine($"{i3}}}");
         sb.AppendLine($"{i2}}}");
         sb.AppendLine($"{i1}}}");
 

@@ -68,9 +68,28 @@ public class MappingGenerator
             sb.AppendLine($"{i3}Id(x => x.{propName}, m =>");
             sb.AppendLine($"{i3}{{");
             sb.AppendLine($"{i3}    m.Column(\"{pk.ColumnName}\");");
-            sb.AppendLine(isNumericPk
-                ? $"{i3}    m.Generator(Generators.Native);"
-                : $"{i3}    m.Generator(Generators.Assigned);");
+
+            if (pk.IsIdentity && isNumericPk)
+            {
+                if (!string.IsNullOrEmpty(pk.SequenceName))
+                {
+                    // Oracle sequence-backed identity
+                    sb.AppendLine($"{i3}    m.Generator(Generators.Sequence, g => g.Params(new {{ sequence = \"{pk.SequenceName}\" }}));");
+                }
+                else
+                {
+                    sb.AppendLine($"{i3}    m.Generator(Generators.Identity);");
+                }
+            }
+            else if (isNumericPk)
+            {
+                sb.AppendLine($"{i3}    m.Generator(Generators.Native);");
+            }
+            else
+            {
+                sb.AppendLine($"{i3}    m.Generator(Generators.Assigned);");
+            }
+
             sb.AppendLine($"{i3}}});");
         }
         else if (pks.Count > 1)
@@ -87,9 +106,21 @@ public class MappingGenerator
 
         sb.AppendLine();
 
-        // Regular properties (non-PK)
+        var associationPlan = AssociationNamingPlanner.Build(table);
+        var primaryKeyColumnNames = table.PrimaryKeys
+            .Select(pk => pk.ColumnName)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var fkColumnsCoveredByManyToOne = associationPlan.ManyToOnes
+            .Where(a => !a.IsComposite)
+            .SelectMany(a => a.ColumnNames)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        // Regular properties (non-PK, non-FK covered by ManyToOne mapping)
         foreach (var col in table.Columns.Where(c => !c.IsPrimaryKey))
         {
+            if (fkColumnsCoveredByManyToOne.Contains(col.ColumnName))
+                continue;
+
             var propName = NamingHelper.ToPropertyName(col.ColumnName);
             sb.AppendLine($"{i3}Property(x => x.{propName}, m =>");
             sb.AppendLine($"{i3}{{");
@@ -102,6 +133,57 @@ public class MappingGenerator
                 sb.AppendLine($"{i3}    m.Length({col.MaxLength.Value});");
 
             sb.AppendLine($"{i3}}});");
+        }
+
+        // ManyToOne mappings
+        foreach (var assoc in associationPlan.ManyToOnes)
+        {
+            if (assoc.IsComposite)
+            {
+                sb.AppendLine();
+                sb.AppendLine($"{i3}// Skipped composite ManyToOne '{assoc.ConstraintName}' ({string.Join(", ", assoc.ColumnNames)}) - manual mapping required.");
+                continue;
+            }
+
+            var fkColumnName = assoc.ColumnNames[0];
+            if (primaryKeyColumnNames.Contains(fkColumnName))
+            {
+                sb.AppendLine();
+                sb.AppendLine($"{i3}// Skipped shared-PK ManyToOne '{assoc.ConstraintName}' ({fkColumnName}) to avoid repeated column mapping.");
+                continue;
+            }
+
+            var fkColumn = table.Columns.FirstOrDefault(c =>
+                string.Equals(c.ColumnName, fkColumnName, StringComparison.OrdinalIgnoreCase));
+
+            sb.AppendLine();
+            sb.AppendLine($"{i3}ManyToOne(x => x.{assoc.PropertyName}, m =>");
+            sb.AppendLine($"{i3}{{");
+            sb.AppendLine($"{i3}    m.Column(\"{fkColumnName}\");");
+
+            if (fkColumn is not null && !fkColumn.IsNullable)
+                sb.AppendLine($"{i3}    m.NotNullable(true);");
+
+            sb.AppendLine($"{i3}}});");
+        }
+
+        // Bag (collection) mappings for inverse side
+        foreach (var assoc in associationPlan.InverseCollections)
+        {
+            if (assoc.IsComposite)
+            {
+                sb.AppendLine();
+                sb.AppendLine($"{i3}// Skipped composite inverse FK '{assoc.ConstraintName}' ({string.Join(", ", assoc.KeyColumnNames)}) - manual mapping required.");
+                continue;
+            }
+
+            sb.AppendLine();
+            sb.AppendLine($"{i3}Bag(x => x.{assoc.PropertyName}, c =>");
+            sb.AppendLine($"{i3}{{");
+            sb.AppendLine($"{i3}    c.Key(k => k.Column(\"{assoc.KeyColumnNames[0]}\"));");
+            sb.AppendLine($"{i3}    c.Inverse(true);");
+            sb.AppendLine($"{i3}    c.Lazy(CollectionLazy.Lazy);");
+            sb.AppendLine($"{i3}}}, r => r.OneToMany());");
         }
 
         sb.AppendLine($"{i2}}}");
