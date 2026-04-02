@@ -32,7 +32,7 @@ public static class NamingHelper
 
     /// <summary>
     /// Derives a ManyToOne navigation property name from a FK column name.
-    /// Strips common suffixes (_ID, _KEY) and PascalCases the rest.
+    /// Strips common suffixes (_ID, _KEY, _FK, _CODE) and PascalCases the rest.
     /// e.g. CREATED_BY_USER_ID -> CreatedByUser, CATEGORY_ID -> Category
     /// </summary>
     public static string ToManyToOnePropertyName(string fkColumnName, string referencedTableName)
