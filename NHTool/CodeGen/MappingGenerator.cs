@@ -18,6 +18,7 @@ public class MappingGenerator
     public string Generate(TableInfo table, string ns)
     {
         var className = NamingHelper.ToClassName(table.TableName);
+        var fkColumnNames = table.FkColumnNames;
         var sb = new StringBuilder();
 
         sb.AppendLine("using NHibernate.Mapping.ByCode;");
@@ -68,9 +69,28 @@ public class MappingGenerator
             sb.AppendLine($"{i3}Id(x => x.{propName}, m =>");
             sb.AppendLine($"{i3}{{");
             sb.AppendLine($"{i3}    m.Column(\"{pk.ColumnName}\");");
-            sb.AppendLine(isNumericPk
-                ? $"{i3}    m.Generator(Generators.Native);"
-                : $"{i3}    m.Generator(Generators.Assigned);");
+
+            if (pk.IsIdentity && isNumericPk)
+            {
+                if (!string.IsNullOrEmpty(pk.SequenceName))
+                {
+                    // Oracle sequence-backed identity
+                    sb.AppendLine($"{i3}    m.Generator(Generators.Sequence, g => g.Params(new {{ sequence = \"{pk.SequenceName}\" }}));");
+                }
+                else
+                {
+                    sb.AppendLine($"{i3}    m.Generator(Generators.Identity);");
+                }
+            }
+            else if (isNumericPk)
+            {
+                sb.AppendLine($"{i3}    m.Generator(Generators.Native);");
+            }
+            else
+            {
+                sb.AppendLine($"{i3}    m.Generator(Generators.Assigned);");
+            }
+
             sb.AppendLine($"{i3}}});");
         }
         else if (pks.Count > 1)
@@ -87,9 +107,12 @@ public class MappingGenerator
 
         sb.AppendLine();
 
-        // Regular properties (non-PK)
+        // Regular properties (non-PK, non-FK)
         foreach (var col in table.Columns.Where(c => !c.IsPrimaryKey))
         {
+            if (fkColumnNames.Contains(col.ColumnName))
+                continue;
+
             var propName = NamingHelper.ToPropertyName(col.ColumnName);
             sb.AppendLine($"{i3}Property(x => x.{propName}, m =>");
             sb.AppendLine($"{i3}{{");
@@ -102,6 +125,40 @@ public class MappingGenerator
                 sb.AppendLine($"{i3}    m.Length({col.MaxLength.Value});");
 
             sb.AppendLine($"{i3}}});");
+        }
+
+        // ManyToOne mappings
+        var usedManyToOneNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var fk in table.ForeignKeys)
+        {
+            var propName = NamingHelper.ToManyToOnePropertyName(fk.FkColumnName, fk.PkTableName);
+            if (!usedManyToOneNames.Add(propName))
+                continue;
+
+            sb.AppendLine();
+            sb.AppendLine($"{i3}ManyToOne(x => x.{propName}, m =>");
+            sb.AppendLine($"{i3}{{");
+            sb.AppendLine($"{i3}    m.Column(\"{fk.FkColumnName}\");");
+            sb.AppendLine($"{i3}}});");
+        }
+
+        // Bag (collection) mappings for inverse side
+        var usedBagNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var fk in table.InverseForeignKeys)
+        {
+            var propName = NamingHelper.ToCollectionPropertyName(fk.FkTableName);
+            if (!usedBagNames.Add(propName))
+                continue;
+
+            var fkClassName = NamingHelper.ToClassName(fk.FkTableName);
+
+            sb.AppendLine();
+            sb.AppendLine($"{i3}Bag(x => x.{propName}, c =>");
+            sb.AppendLine($"{i3}{{");
+            sb.AppendLine($"{i3}    c.Key(k => k.Column(\"{fk.FkColumnName}\"));");
+            sb.AppendLine($"{i3}    c.Inverse(true);");
+            sb.AppendLine($"{i3}    c.Lazy(CollectionLazy.Lazy);");
+            sb.AppendLine($"{i3}}}, r => r.OneToMany());");
         }
 
         sb.AppendLine($"{i2}}}");

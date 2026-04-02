@@ -24,7 +24,6 @@ public class SqlServerSchemaReader : ISchemaReader
               AND TABLE_SCHEMA = @schema
             ORDER BY TABLE_NAME";
 
-        // Scope the reader so it's closed before the next query
         {
             await using var tablesCmd = new MsSqlCommand(tablesSql, connection);
             tablesCmd.Parameters.AddWithValue("@schema", schema);
@@ -38,14 +37,12 @@ public class SqlServerSchemaReader : ISchemaReader
                     TableName = tablesReader.GetString(1)
                 });
             }
-        } // tablesReader is disposed here
+        }
 
         if (tables.Count == 0)
             return tables;
 
-        // ── 2. Read ALL columns + PK flags in a single round-trip ────
-        // Join to INFORMATION_SCHEMA.TABLES with TABLE_TYPE='BASE TABLE' to
-        // exclude views and other non-table objects from the result set.
+        // ── 2. Read ALL columns + PK + IDENTITY in a single round-trip ──
         var columnsSql = @"
             SELECT
                 c.TABLE_NAME,
@@ -55,7 +52,8 @@ public class SqlServerSchemaReader : ISchemaReader
                 c.CHARACTER_MAXIMUM_LENGTH,
                 c.NUMERIC_PRECISION,
                 c.NUMERIC_SCALE,
-                CASE WHEN pk.COLUMN_NAME IS NOT NULL THEN 1 ELSE 0 END AS IS_PK
+                CASE WHEN pk.COLUMN_NAME IS NOT NULL THEN 1 ELSE 0 END AS IS_PK,
+                ISNULL(sc.is_identity, 0) AS IS_IDENTITY
             FROM INFORMATION_SCHEMA.COLUMNS c
             INNER JOIN INFORMATION_SCHEMA.TABLES t
                 ON c.TABLE_SCHEMA = t.TABLE_SCHEMA
@@ -72,7 +70,16 @@ public class SqlServerSchemaReader : ISchemaReader
             ) pk ON pk.COLUMN_NAME = c.COLUMN_NAME
                 AND pk.TABLE_NAME = c.TABLE_NAME
                 AND pk.TABLE_SCHEMA = c.TABLE_SCHEMA
+            LEFT JOIN sys.columns sc
+                ON sc.name = c.COLUMN_NAME
+            LEFT JOIN sys.tables st
+                ON sc.object_id = st.object_id
+               AND st.name = c.TABLE_NAME
+            LEFT JOIN sys.schemas ss
+                ON st.schema_id = ss.schema_id
+               AND ss.name = c.TABLE_SCHEMA
             WHERE c.TABLE_SCHEMA = @schema
+              AND (st.object_id IS NOT NULL OR sc.object_id IS NULL)
             ORDER BY c.TABLE_NAME, c.ORDINAL_POSITION";
 
         {
@@ -98,12 +105,12 @@ public class SqlServerSchemaReader : ISchemaReader
                     MaxLength = colReader.IsDBNull(4) ? null : colReader.GetInt32(4),
                     Precision = colReader.IsDBNull(5) ? null : Convert.ToInt32(colReader.GetByte(5)),
                     Scale = colReader.IsDBNull(6) ? null : colReader.GetInt32(6),
-                    IsPrimaryKey = colReader.GetInt32(7) == 1
+                    IsPrimaryKey = colReader.GetInt32(7) == 1,
+                    IsIdentity = colReader.GetBoolean(8)
                 });
             }
         }
 
-        // ── 3. Assign columns to their tables ───────────────────────
         foreach (var table in tables)
         {
             if (columnsByTable.TryGetValue(table.TableName, out var cols))
@@ -111,5 +118,51 @@ public class SqlServerSchemaReader : ISchemaReader
         }
 
         return tables;
+    }
+
+    public async Task<List<ForeignKeyInfo>> ReadForeignKeysAsync(string connectionString, string? schemaFilter = null)
+    {
+        var fks = new List<ForeignKeyInfo>();
+
+        await using var connection = new MsSqlConnection(connectionString);
+        await connection.OpenAsync();
+
+        string schema = schemaFilter ?? "dbo";
+
+        var sql = @"
+            SELECT
+                rc.CONSTRAINT_NAME,
+                fk_cu.TABLE_NAME    AS FK_TABLE,
+                fk_cu.COLUMN_NAME   AS FK_COLUMN,
+                pk_cu.TABLE_NAME    AS PK_TABLE,
+                pk_cu.COLUMN_NAME   AS PK_COLUMN
+            FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS rc
+            JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE fk_cu
+              ON rc.CONSTRAINT_NAME = fk_cu.CONSTRAINT_NAME
+             AND rc.CONSTRAINT_SCHEMA = fk_cu.CONSTRAINT_SCHEMA
+            JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE pk_cu
+              ON rc.UNIQUE_CONSTRAINT_NAME = pk_cu.CONSTRAINT_NAME
+             AND rc.UNIQUE_CONSTRAINT_SCHEMA = pk_cu.CONSTRAINT_SCHEMA
+             AND fk_cu.ORDINAL_POSITION = pk_cu.ORDINAL_POSITION
+            WHERE rc.CONSTRAINT_SCHEMA = @schema
+            ORDER BY rc.CONSTRAINT_NAME, fk_cu.ORDINAL_POSITION";
+
+        await using var cmd = new MsSqlCommand(sql, connection);
+        cmd.Parameters.AddWithValue("@schema", schema);
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            fks.Add(new ForeignKeyInfo
+            {
+                ConstraintName = reader.GetString(0),
+                FkTableName = reader.GetString(1),
+                FkColumnName = reader.GetString(2),
+                PkTableName = reader.GetString(3),
+                PkColumnName = reader.GetString(4)
+            });
+        }
+
+        return fks;
     }
 }

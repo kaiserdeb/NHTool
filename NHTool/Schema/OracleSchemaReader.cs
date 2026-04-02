@@ -14,22 +14,7 @@ public class OracleSchemaReader : ISchemaReader
         await using var connection = new OracleConnection(connectionString);
         await connection.OpenAsync();
 
-        // ── Resolve owner: prefer --schema, fallback to connected user ──
-        string owner;
-        if (!string.IsNullOrWhiteSpace(schemaFilter))
-        {
-            owner = schemaFilter.ToUpperInvariant();
-        }
-        else
-        {
-            await using var userCmd = new OracleCommand("SELECT USER FROM DUAL", connection);
-            var result = await userCmd.ExecuteScalarAsync();
-            var currentUser = result?.ToString();
-            if (string.IsNullOrWhiteSpace(currentUser))
-                throw new InvalidOperationException("Cannot determine schema owner from connected user.");
-
-            owner = currentUser.ToUpperInvariant();
-        }
+        string owner = await ResolveOwnerAsync(connection, schemaFilter);
 
         // ── 1. Read all tables ───────────────────────────────────────
         var tablesSql = @"
@@ -40,7 +25,6 @@ public class OracleSchemaReader : ISchemaReader
               AND TABLE_NAME NOT LIKE 'SYS_%'
             ORDER BY TABLE_NAME";
 
-        // Scope the reader so it's closed before the next query
         {
             await using var tablesCmd = new OracleCommand(tablesSql, connection);
             tablesCmd.Parameters.Add(new OracleParameter("owner", owner));
@@ -54,14 +38,12 @@ public class OracleSchemaReader : ISchemaReader
                     TableName = tablesReader.GetString(0)
                 });
             }
-        } // tablesReader is disposed here
+        }
 
         if (tables.Count == 0)
             return tables;
 
         // ── 2. Read ALL columns + PK flags in a single round-trip ────
-        // Join to ALL_TABLES with the same filters (excluding BIN$%, SYS_%) to
-        // avoid pulling columns for views or excluded system tables.
         var columnsSql = @"
             SELECT c.TABLE_NAME,
                    c.COLUMN_NAME,
@@ -91,7 +73,7 @@ public class OracleSchemaReader : ISchemaReader
 
         {
             await using var colCmd = new OracleCommand(columnsSql, connection);
-            colCmd.BindByName = true; // Oracle defaults to bind-by-position; query uses :owner twice
+            colCmd.BindByName = true;
             colCmd.Parameters.Add(new OracleParameter("owner", owner));
 
             await using var colReader = await colCmd.ExecuteReaderAsync();
@@ -105,8 +87,6 @@ public class OracleSchemaReader : ISchemaReader
                     columnsByTable[tableName] = columns;
                 }
 
-                // Use Convert.ToInt32(GetValue(...)) because Oracle NUMBER returns
-                // OracleDecimal, and GetInt32() can throw InvalidCastException.
                 columns.Add(new ColumnInfo
                 {
                     ColumnName = colReader.GetString(1),
@@ -120,13 +100,119 @@ public class OracleSchemaReader : ISchemaReader
             }
         }
 
-        // ── 3. Assign columns to their tables ───────────────────────
         foreach (var table in tables)
         {
             if (columnsByTable.TryGetValue(table.TableName, out var cols))
                 table.Columns = cols;
         }
 
+        // ── 3. Detect identity columns (Oracle 12c+) ────────────────
+        await DetectIdentityColumnsAsync(connection, owner, tables);
+
         return tables;
+    }
+
+    public async Task<List<ForeignKeyInfo>> ReadForeignKeysAsync(string connectionString, string? schemaFilter = null)
+    {
+        var fks = new List<ForeignKeyInfo>();
+
+        await using var connection = new OracleConnection(connectionString);
+        await connection.OpenAsync();
+
+        string owner = await ResolveOwnerAsync(connection, schemaFilter);
+
+        var sql = @"
+            SELECT ac.CONSTRAINT_NAME,
+                   acc_fk.TABLE_NAME   AS FK_TABLE,
+                   acc_fk.COLUMN_NAME  AS FK_COLUMN,
+                   acc_pk.TABLE_NAME   AS PK_TABLE,
+                   acc_pk.COLUMN_NAME  AS PK_COLUMN
+            FROM ALL_CONSTRAINTS ac
+            JOIN ALL_CONS_COLUMNS acc_fk
+              ON ac.CONSTRAINT_NAME = acc_fk.CONSTRAINT_NAME
+             AND ac.OWNER = acc_fk.OWNER
+            JOIN ALL_CONS_COLUMNS acc_pk
+              ON ac.R_CONSTRAINT_NAME = acc_pk.CONSTRAINT_NAME
+             AND ac.R_OWNER = acc_pk.OWNER
+             AND acc_fk.POSITION = acc_pk.POSITION
+            WHERE ac.CONSTRAINT_TYPE = 'R'
+              AND ac.OWNER = :owner
+            ORDER BY ac.CONSTRAINT_NAME, acc_fk.POSITION";
+
+        await using var cmd = new OracleCommand(sql, connection);
+        cmd.Parameters.Add(new OracleParameter("owner", owner));
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            fks.Add(new ForeignKeyInfo
+            {
+                ConstraintName = reader.GetString(0),
+                FkTableName = reader.GetString(1),
+                FkColumnName = reader.GetString(2),
+                PkTableName = reader.GetString(3),
+                PkColumnName = reader.GetString(4)
+            });
+        }
+
+        return fks;
+    }
+
+    private static async Task<string> ResolveOwnerAsync(OracleConnection connection, string? schemaFilter)
+    {
+        if (!string.IsNullOrWhiteSpace(schemaFilter))
+            return schemaFilter.ToUpperInvariant();
+
+        await using var userCmd = new OracleCommand("SELECT USER FROM DUAL", connection);
+        var result = await userCmd.ExecuteScalarAsync();
+        var currentUser = result?.ToString();
+        if (string.IsNullOrWhiteSpace(currentUser))
+            throw new InvalidOperationException("Cannot determine schema owner from connected user.");
+
+        return currentUser.ToUpperInvariant();
+    }
+
+    private static async Task DetectIdentityColumnsAsync(
+        OracleConnection connection, string owner, List<TableInfo> tables)
+    {
+        // ALL_TAB_IDENTITY_COLS available in Oracle 12c+
+        var sql = @"
+            SELECT TABLE_NAME, COLUMN_NAME, SEQUENCE_NAME
+            FROM ALL_TAB_IDENTITY_COLS
+            WHERE OWNER = :owner";
+
+        try
+        {
+            await using var cmd = new OracleCommand(sql, connection);
+            cmd.Parameters.Add(new OracleParameter("owner", owner));
+
+            var identityMap = new Dictionary<(string Table, string Column), string>();
+
+            await using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                var tableName = reader.GetString(0);
+                var columnName = reader.GetString(1);
+                var seqName = reader.IsDBNull(2) ? null : reader.GetString(2);
+                identityMap[(tableName, columnName)] = seqName ?? string.Empty;
+            }
+
+            foreach (var table in tables)
+            {
+                foreach (var col in table.Columns)
+                {
+                    if (identityMap.TryGetValue((table.TableName, col.ColumnName), out var seq))
+                    {
+                        col.IsIdentity = true;
+                        if (!string.IsNullOrEmpty(seq))
+                            col.SequenceName = seq;
+                    }
+                }
+            }
+        }
+        catch (OracleException)
+        {
+            // ALL_TAB_IDENTITY_COLS may not exist on Oracle < 12c; silently skip
+        }
     }
 }

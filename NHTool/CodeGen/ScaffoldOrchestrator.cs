@@ -13,7 +13,10 @@ public class ScaffoldOrchestrator
         string ns,
         string? schemaFilter,
         HashSet<string>? tableFilter = null,
-        bool legacyStyle = false)
+        HashSet<string>? excludeFilter = null,
+        bool legacyStyle = false,
+        bool dryRun = false,
+        bool force = false)
     {
         Console.WriteLine($"Connecting to {provider} database...");
 
@@ -30,6 +33,13 @@ public class ScaffoldOrchestrator
                 Console.WriteLine($"Warning: tables not found in schema: {string.Join(", ", notFound)}");
 
             Console.WriteLine($"Filtered {before} -> {tables.Count} table(s) by --tables parameter.");
+        }
+
+        if (excludeFilter is { Count: > 0 })
+        {
+            var before = tables.Count;
+            tables = tables.Where(t => !excludeFilter.Contains(t.TableName.ToUpperInvariant())).ToList();
+            Console.WriteLine($"Excluded {before - tables.Count} table(s) by --exclude-tables parameter.");
         }
 
         if (tables.Count == 0)
@@ -52,10 +62,56 @@ public class ScaffoldOrchestrator
             return;
         }
 
+        // ── Wire up foreign keys ────────────────────────────────────────
+        var fks = await reader.ReadForeignKeysAsync(connectionString, schemaFilter);
+        var tableByName = tables.ToDictionary(t => t.TableName, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var fk in fks)
+        {
+            // Only wire FK if both sides are in the scaffolded set
+            if (tableByName.TryGetValue(fk.FkTableName, out var fkTable)
+                && tableByName.ContainsKey(fk.PkTableName))
+            {
+                fkTable.ForeignKeys.Add(fk);
+            }
+
+            if (tableByName.TryGetValue(fk.PkTableName, out var pkTable)
+                && tableByName.ContainsKey(fk.FkTableName))
+            {
+                pkTable.InverseForeignKeys.Add(fk);
+            }
+        }
+
         Console.WriteLine($"Found {tables.Count} table(s). Generating code...");
+
+        if (dryRun)
+        {
+            Console.WriteLine();
+            Console.WriteLine("[DRY RUN] The following files would be generated:");
+            foreach (var table in tables)
+            {
+                var className = NamingHelper.ToClassName(table.TableName);
+                Console.WriteLine($"  -> {Path.Combine(outputDir, "Entities", $"{className}.cs")}");
+                Console.WriteLine($"  -> {Path.Combine(outputDir, "Mappings", $"{className}Map.cs")}");
+            }
+            Console.WriteLine($"  -> {Path.Combine(outputDir, "NHibernateHelper.cs")}");
+            Console.WriteLine();
+            Console.WriteLine($"[DRY RUN] {tables.Count} entities would be generated. No files were written.");
+            return;
+        }
 
         var entitiesDir = Path.Combine(outputDir, "Entities");
         var mappingsDir = Path.Combine(outputDir, "Mappings");
+
+        if (!force && Directory.Exists(outputDir)
+            && (Directory.GetFiles(outputDir, "*.cs", SearchOption.AllDirectories).Length > 0))
+        {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine($"Warning: output directory '{outputDir}' already contains .cs files.");
+            Console.WriteLine("Use --force (-f) to overwrite existing files.");
+            Console.ResetColor();
+            return;
+        }
 
         Directory.CreateDirectory(entitiesDir);
         Directory.CreateDirectory(mappingsDir);
