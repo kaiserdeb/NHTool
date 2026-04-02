@@ -210,7 +210,7 @@ public class OracleSchemaReader : ISchemaReader
                 }
             }
         }
-        catch (OracleException)
+        catch (OracleException ex) when (ex.Number == 942)
         {
             // ALL_TAB_IDENTITY_COLS may not exist on Oracle < 12c; silently skip
         }

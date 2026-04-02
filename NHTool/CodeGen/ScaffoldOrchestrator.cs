@@ -106,12 +106,9 @@ public class ScaffoldOrchestrator
         if (!force && Directory.Exists(outputDir)
             && (Directory.GetFiles(outputDir, "*.cs", SearchOption.AllDirectories).Length > 0))
         {
-            Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine($"Warning: output directory '{outputDir}' already contains .cs files.");
-            Console.WriteLine("Use --force (-f) to overwrite existing files.");
-            Console.ResetColor();
-            throw new InvalidOperationException(
-                $"Scaffolding aborted because output directory '{outputDir}' already contains .cs files and --force was not specified.");
+            throw new ArgumentException(
+                $"Scaffolding aborted because output directory '{outputDir}' already contains .cs files and --force was not specified.",
+                nameof(outputDir));
         }
 
         Directory.CreateDirectory(entitiesDir);

@@ -70,16 +70,15 @@ public class SqlServerSchemaReader : ISchemaReader
             ) pk ON pk.COLUMN_NAME = c.COLUMN_NAME
                 AND pk.TABLE_NAME = c.TABLE_NAME
                 AND pk.TABLE_SCHEMA = c.TABLE_SCHEMA
-            LEFT JOIN sys.columns sc
-                ON sc.name = c.COLUMN_NAME
-            LEFT JOIN sys.tables st
-                ON sc.object_id = st.object_id
-               AND st.name = c.TABLE_NAME
             LEFT JOIN sys.schemas ss
-                ON st.schema_id = ss.schema_id
-               AND ss.name = c.TABLE_SCHEMA
+                ON ss.name = c.TABLE_SCHEMA
+            LEFT JOIN sys.tables st
+                ON st.name = c.TABLE_NAME
+               AND st.schema_id = ss.schema_id
+            LEFT JOIN sys.columns sc
+                ON sc.object_id = st.object_id
+               AND sc.name = c.COLUMN_NAME
             WHERE c.TABLE_SCHEMA = @schema
-              AND (st.object_id IS NOT NULL OR sc.object_id IS NULL)
             ORDER BY c.TABLE_NAME, c.ORDINAL_POSITION";
 
         {

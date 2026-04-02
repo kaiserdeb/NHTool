@@ -18,7 +18,6 @@ public class MappingGenerator
     public string Generate(TableInfo table, string ns)
     {
         var className = NamingHelper.ToClassName(table.TableName);
-        var fkColumnNames = table.FkColumnNames;
         var sb = new StringBuilder();
 
         sb.AppendLine("using NHibernate.Mapping.ByCode;");
@@ -107,10 +106,16 @@ public class MappingGenerator
 
         sb.AppendLine();
 
-        // Regular properties (non-PK, non-FK)
+        var associationPlan = AssociationNamingPlanner.Build(table);
+        var fkColumnsCoveredByManyToOne = associationPlan.ManyToOnes
+            .Where(a => !a.IsComposite)
+            .SelectMany(a => a.ColumnNames)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        // Regular properties (non-PK, non-FK covered by ManyToOne mapping)
         foreach (var col in table.Columns.Where(c => !c.IsPrimaryKey))
         {
-            if (fkColumnNames.Contains(col.ColumnName))
+            if (fkColumnsCoveredByManyToOne.Contains(col.ColumnName))
                 continue;
 
             var propName = NamingHelper.ToPropertyName(col.ColumnName);
@@ -128,34 +133,36 @@ public class MappingGenerator
         }
 
         // ManyToOne mappings
-        var usedManyToOneNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var fk in table.ForeignKeys)
+        foreach (var assoc in associationPlan.ManyToOnes)
         {
-            var propName = NamingHelper.ToManyToOnePropertyName(fk.FkColumnName, fk.PkTableName);
-            if (!usedManyToOneNames.Add(propName))
+            if (assoc.IsComposite)
+            {
+                sb.AppendLine();
+                sb.AppendLine($"{i3}// Skipped composite ManyToOne '{assoc.ConstraintName}' ({string.Join(", ", assoc.ColumnNames)}) - manual mapping required.");
                 continue;
+            }
 
             sb.AppendLine();
-            sb.AppendLine($"{i3}ManyToOne(x => x.{propName}, m =>");
+            sb.AppendLine($"{i3}ManyToOne(x => x.{assoc.PropertyName}, m =>");
             sb.AppendLine($"{i3}{{");
-            sb.AppendLine($"{i3}    m.Column(\"{fk.FkColumnName}\");");
+            sb.AppendLine($"{i3}    m.Column(\"{assoc.ColumnNames[0]}\");");
             sb.AppendLine($"{i3}}});");
         }
 
         // Bag (collection) mappings for inverse side
-        var usedBagNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var fk in table.InverseForeignKeys)
+        foreach (var assoc in associationPlan.InverseCollections)
         {
-            var propName = NamingHelper.ToCollectionPropertyName(fk.FkTableName);
-            if (!usedBagNames.Add(propName))
+            if (assoc.IsComposite)
+            {
+                sb.AppendLine();
+                sb.AppendLine($"{i3}// Skipped composite inverse FK '{assoc.ConstraintName}' ({string.Join(", ", assoc.KeyColumnNames)}) - manual mapping required.");
                 continue;
-
-            var fkClassName = NamingHelper.ToClassName(fk.FkTableName);
+            }
 
             sb.AppendLine();
-            sb.AppendLine($"{i3}Bag(x => x.{propName}, c =>");
+            sb.AppendLine($"{i3}Bag(x => x.{assoc.PropertyName}, c =>");
             sb.AppendLine($"{i3}{{");
-            sb.AppendLine($"{i3}    c.Key(k => k.Column(\"{fk.FkColumnName}\"));");
+            sb.AppendLine($"{i3}    c.Key(k => k.Column(\"{assoc.KeyColumnNames[0]}\"));");
             sb.AppendLine($"{i3}    c.Inverse(true);");
             sb.AppendLine($"{i3}    c.Lazy(CollectionLazy.Lazy);");
             sb.AppendLine($"{i3}}}, r => r.OneToMany());");

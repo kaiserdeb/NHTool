@@ -48,9 +48,14 @@ public static class NamingHelper
             }
         }
 
-        // If stripping left something meaningful, use it; otherwise use the referenced table name
-        if (!string.IsNullOrEmpty(stripped))
-            return ToPropertyName(stripped);
+        // If stripping left something meaningful and not just a generic identifier,
+        // use it; otherwise use the referenced table name to avoid collisions like "Id".
+        if (!string.IsNullOrWhiteSpace(stripped))
+        {
+            var propertyName = ToPropertyName(stripped);
+            if (!IsGenericIdentifierName(propertyName))
+                return propertyName;
+        }
 
         return ToClassName(referencedTableName);
     }
@@ -65,5 +70,10 @@ public static class NamingHelper
             .ToLowerInvariant()
             .Replace("_", " ")
             .Pascalize();
+    }
+
+    private static bool IsGenericIdentifierName(string propertyName)
+    {
+        return propertyName is "Id" or "Key" or "Fk" or "Pk" or "Code";
     }
 }
